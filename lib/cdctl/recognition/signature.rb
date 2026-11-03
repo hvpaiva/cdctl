@@ -10,7 +10,8 @@ module Cdctl
     # the gold of a selected entry from the white of the others, whatever is behind them.
     module Signature
       CHANNELS = %w[luma warm].freeze
-      # Below this spread a grid is flat, and a flat area correlates with nothing in particular.
+      # Below this spread a grid is flat. Correlation scales any noise up to full contrast, so without
+      # this a nearly black frame can match a label. Each side has to clear it on its own.
       MIN_SPREAD = 3.0
 
       module_function
@@ -35,8 +36,12 @@ module Cdctl
 
         a = centered(one)
         b = centered(other)
-        spread = Math.sqrt(dot(a, a) * dot(b, b))
-        spread < (MIN_SPREAD * MIN_SPREAD * one.size) ? 0.0 : dot(a, b) / spread
+        floor = MIN_SPREAD * MIN_SPREAD * one.size
+        energy_a = dot(a, a)
+        energy_b = dot(b, b)
+        return 0.0 if energy_a < floor || energy_b < floor
+
+        dot(a, b) / Math.sqrt(energy_a * energy_b)
       end
 
       def each_pixel(frame, rect)

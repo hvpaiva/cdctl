@@ -49,6 +49,15 @@ class SignatureTest < Minitest::Test
     assert_in_delta 0.0, SIGNATURE.correlation([10, 200, 10, 200], [50, 50, 50, 50]), 0.001
   end
 
+  # Correlation scales noise up to full contrast, so a nearly black frame could match any label.
+  def test_noise_on_a_nearly_black_frame_correlates_with_nothing
+    label = [10, 200, 10, 200, 200, 10, 200, 10]
+    noise = [0, 2, 0, 2, 2, 0, 2, 0]
+
+    assert_in_delta 0.0, SIGNATURE.correlation(label, noise), 0.001
+    assert_in_delta 0.0, SIGNATURE.correlation(noise, label), 0.001
+  end
+
   def test_grids_that_cannot_be_compared_score_zero
     assert_in_delta 0.0, SIGNATURE.correlation([1, 2], [1, 2, 3]), 0.001
     assert_in_delta 0.0, SIGNATURE.correlation([], []), 0.001
