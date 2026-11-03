@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "required": ["observation_id", "valid", "age_seconds", "differences"],
+  "properties": {
+    "observation_id": { "type": "string" },
+    "valid": { "type": "boolean" },
+    "age_seconds": { "type": "number" },
+    "observed_at": { "type": "string" },
+    "screenshot": { "type": ["string", "null"] },
+    "differences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field"],
+        "properties": { "field": { "type": "string" }, "was": {}, "now": {} }
+      }
+    }
+  }
+}

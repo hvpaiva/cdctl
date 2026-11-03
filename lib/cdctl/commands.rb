@@ -3,18 +3,28 @@
 require_relative 'cli'
 require_relative 'error_codes'
 require_relative 'version'
+require_relative 'commands/capabilities'
+require_relative 'commands/doctor'
+require_relative 'commands/observation'
+require_relative 'commands/observe'
 require_relative 'commands/planned'
 require_relative 'commands/schema'
+require_relative 'commands/screenshot'
+require_relative 'commands/status'
 
 module Cdctl
   module Commands
     PROGRAM = 'cdctl'
     DESCRIPTION = 'Observe and control Crimson Desert from the command line, with evidence'
     LONG_DESCRIPTION = "#{DESCRIPTION}.\n\n" \
-                       'Every command answers with versioned JSON under --json.'.freeze
+                       'cdctl finds the Steam installation, the game process and its window, and reports what it ' \
+                       'can prove, including what it could not verify. Every command answers with versioned JSON ' \
+                       "under --json; start with cdctl capabilities --json.\n\n" \
+                       'It works on any machine that runs the game. What a machine lacks is reported, never ' \
+                       'assumed. This version only observes: it sends nothing to the game.'.freeze
 
     # Help lists the commands in this order within their sections.
-    COMMANDS = [Schema].freeze
+    COMMANDS = [Capabilities, Doctor, Schema, Status, Observe, Screenshot, Observation].freeze
 
     def self.registry(factory)
       CLI::Registry.new(
@@ -34,7 +44,8 @@ module Cdctl
     def self.environment
       CLI::Glossary.new(
         title: 'Environment',
-        entries: [['CDCTL_STATE_HOME', 'Where captures and observations are stored.'],
+        entries: [['CDCTL_STEAM_ROOT', 'Use this Steam directory instead of searching.'],
+                  ['CDCTL_STATE_HOME', 'Where captures and observations are stored.'],
                   ['CDCTL_CONFIG', 'The configuration file.'],
                   ['CDCTL_COLOR', 'When to use color: auto, always or never.']]
       )

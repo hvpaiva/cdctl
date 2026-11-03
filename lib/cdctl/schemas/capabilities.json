@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "required": ["environment", "capabilities", "error_codes", "exit_statuses"],
+  "properties": {
+    "environment": {
+      "type": "object",
+      "required": ["platform", "compositor", "validation"],
+      "properties": {
+        "platform": { "type": "string" },
+        "compositor": { "type": ["string", "null"] },
+        "validation": {
+          "enum": ["tested_with_the_game", "not_tested_with_the_game"],
+          "description": "Whether this kind of setup has been tried against the real game. See docs/test-matrix.md."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "state", "summary", "commands"],
+        "properties": {
+          "id": { "type": "string" },
+          "state": {
+            "enum": ["available", "unavailable", "unverified", "observe_only", "not_implemented", "unsupported", "mod_dependent"],
+            "description": "available was proven here and now, unverified is implemented with nothing to prove it on yet, observe_only reads without acting, mod_dependent needs a mod that was not identified."
+          },
+          "summary": { "type": "string" },
+          "commands": { "type": "array", "items": { "type": "string" } },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "error_codes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "category", "meaning"]
+      }
+    },
+    "exit_statuses": { "type": "object" }
+  }
+}

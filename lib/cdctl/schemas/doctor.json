@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "required": ["healthy", "checks"],
+  "properties": {
+    "healthy": { "type": "boolean", "description": "False when a check failed. Warnings keep it true." },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status", "detail"],
+        "properties": {
+          "id": { "type": "string" },
+          "status": { "enum": ["ok", "info", "warn", "fail", "skip"] },
+          "detail": { "type": "string" },
+          "remedy": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["path", "modals", "resolution"],
+  "properties": {
+    "path": { "type": "string" },
+    "modals": { "$ref": "#/$defs/snapshot/properties/modals" },
+    "resolution": { "type": "object" }
+  }
+}

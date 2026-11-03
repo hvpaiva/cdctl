@@ -1,0 +1,17 @@
+{
+  "allOf": [
+    { "$ref": "#/$defs/snapshot" },
+    {
+      "type": "object",
+      "required": ["observation_id", "fingerprint", "screen"],
+      "properties": {
+        "observation_id": { "type": "string", "pattern": "^obs-[0-9a-f]{16}$" },
+        "fingerprint": {
+          "type": "object",
+          "description": "What must stay equal for a coordinate from this capture to remain valid."
+        },
+        "screen": { "$ref": "#/$defs/fact", "description": "The recognized screen." }
+      }
+    }
+  ]
+}
