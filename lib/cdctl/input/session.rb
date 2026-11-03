@@ -3,6 +3,7 @@
 require 'time'
 require_relative '../error'
 require_relative '../lease'
+require_relative '../private_files'
 require_relative '../x11'
 require_relative 'activity'
 require_relative 'guard'
@@ -17,6 +18,7 @@ module Cdctl
     class Session
       NOT_WATCHED_ENTRY = 'input.no_other_source'
       LEFTOVER_WAIT = 1.5
+      LOCK_FILE = 'session.lock'
 
       attr_reader :sender, :guard, :recovered
 
@@ -44,18 +46,24 @@ module Cdctl
       def start
         require_xtest
         @lease.verify!(@token)
+        take_turn
         @lease.touch(@token, request_id: @request_id)
         @recovered = Session.settle(@journal, @connection, @runtime.proc_root)
         @guard = build_guard
         @activity = Activity.open(@opener)
         start_sentinel
         @sender = Sender.new(connection: @connection, guard: @guard, activity: @activity, journal: @journal,
-                             sentinel: @sentinel, journal_base: journal_base)
+                             sentinel: @sentinel, journal_base: journal_base, actions: recovered_actions)
       end
 
+      # A journal still there means something may still be held, whatever stopped this on the way
+      # out, so the sentinel is left to release it. "Done" would dismiss it with the key down.
       def close
-        @sentinel&.finish
+        if @sentinel
+          @journal.read ? @sentinel.abandon : @sentinel.finish
+        end
         @activity&.close
+        @turn&.close
       end
 
       def keycode_for(keysym) = @connection.keycode_for(keysym)
@@ -73,16 +81,28 @@ module Cdctl
       end
 
       # What the last command left behind, if it could not clean up. A live owner is still working,
-      # and a live sentinel is about to release, so only a journal with neither is a leftover.
+      # and a live sentinel is about to release, so only a journal with neither is a leftover. A
+      # press on another X server cannot be released from here, so the journal stays for whoever can.
       def self.settle(journal, connection, proc_root)
         record = wait_for_owners(journal, proc_root)
         return nil unless record
 
+        other_display!(record, connection)
         held = Array(record[:held])
         held.reverse_each { release(connection, it) }
         journal.clear
-        { released: held.size, pressed_at: record[:pressed_at], request_id: record[:request_id] }.compact
+        { released: held.size, pressed_at: record[:pressed_at], request_id: record[:request_id],
+          unreadable: record[:damaged] }.compact
       end
+
+      def self.other_display!(record, connection)
+        return if record[:display].nil? || record[:display] == connection.display
+
+        raise Error.new("a press was left on display #{record[:display]}, and this is connected to " \
+                        "#{connection.display}", code: 'PRECONDITION_FAILED',
+                                                 next_steps: ['Run this where that display can be reached.'])
+      end
+      private_class_method :other_display!
 
       def self.wait_for_owners(journal, proc_root)
         deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + LEFTOVER_WAIT
@@ -132,6 +152,26 @@ module Cdctl
 
         raise Error.new('this X server has no XTEST extension, which is how input is sent',
                         code: 'UNSUPPORTED_BACKEND')
+      end
+
+      # The journal describes one hold, so one command acts at a time, even under one token. The lock
+      # ends with its process, and the sentinel keeps it until its own work is over.
+      def take_turn
+        directory = @runtime.paths.input_dir
+        PrivateFiles.directory(directory)
+        @turn = File.open(File.join(directory, LOCK_FILE), File::RDWR | File::CREAT, 0o600)
+        return if @turn.flock(File::LOCK_EX | File::LOCK_NB)
+
+        raise Error.new('another cdctl process is sending input', code: 'PRECONDITION_FAILED',
+                                                                  next_steps: ['Wait for it to finish.'])
+      rescue SystemCallError => e
+        raise Error.from_system_call(e, directory)
+      end
+
+      def recovered_actions
+        return [] unless @recovered && @recovered[:released].positive?
+
+        [{ type: 'release', **@recovered }]
       end
 
       def build_guard

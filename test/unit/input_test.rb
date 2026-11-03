@@ -161,7 +161,7 @@ class InputCommandTest < Minitest::Test
 
     assert_refused 'USER_INTERFERENCE', status, result
     assert_equal({ keys: 1, buttons: false }, result[:error][:details])
-    refute_includes result.to_s, '99'
+    refute_includes result[:error].to_s, '99'
   end
 
   def test_a_button_someone_else_holds_means_nothing_is_sent
@@ -262,6 +262,60 @@ class InputCommandTest < Minitest::Test
     assert_equal 1, @x.fake_input_kinds.count(KEY_PRESS)
     assert_equal 1, result[:actions].size
     assert_all_released
+  end
+
+  # Each press looks again, so what ended between two of them stops the second one.
+  def stop_after_first_release
+    released = false
+    @x.on_fake_input = lambda do |type, _|
+      next unless type == KEY_RELEASE && !released
+
+      released = true
+      yield
+    end
+    key('--hold-ms', '5', '--repeat', '2', '--gap-ms', '5')
+  end
+
+  def test_a_lease_taken_over_between_two_presses_stops_the_second
+    status, result, = stop_after_first_release do
+      Cdctl::Lease.for(@machine.runtime).acquire(owner: 'other', purpose: 'mine', request_id: 'r', takeover: true,
+                                                 force: true, reason: 'testing')
+    end
+
+    assert_equal 3, status
+    assert_equal 'LEASE_LOST', result[:error][:code]
+    assert_equal 1, @x.fake_input_kinds.count(KEY_PRESS)
+    assert_all_released
+  end
+
+  def test_a_game_gone_between_two_presses_stops_the_second
+    status, result, = stop_after_first_release { FileUtils.rm_rf(File.join(@machine.proc_root, '4242')) }
+
+    assert_equal 3, status
+    assert_equal 'TARGET_CHANGED', result[:error][:code]
+    assert_equal 1, @x.fake_input_kinds.count(KEY_PRESS)
+  end
+
+  def test_a_window_resized_between_two_presses_stops_the_second
+    status, result, = stop_after_first_release { @x.windows[Machine::GAME_WINDOW].height = 720 }
+
+    assert_equal 3, status
+    assert_equal 'RESOLUTION_CHANGED', result[:error][:code]
+    assert_equal 1, @x.fake_input_kinds.count(KEY_PRESS)
+    assert_all_released
+  end
+
+  def test_the_sentinel_dying_during_a_hold_ends_it_at_once
+    journal = Cdctl::Input::Journal.new(Cdctl::Paths.new(@machine.env).input_dir)
+    press_then { Process.kill('KILL', journal.read[:sentinel][:pid]) }
+    status, result, = key('--hold-ms', '5000')
+
+    assert_equal 1, status
+    assert_equal 'INTERNAL_ERROR', result[:error][:code]
+    assert_equal 'cdctl', result[:actions].first[:released_by]
+    assert_operator result[:actions].first[:held_ms], :<, 2000
+    assert_all_released
+    assert_nil journal.read
   end
 
   def test_a_good_observation_is_accepted_and_a_bad_one_refused
@@ -377,14 +431,167 @@ class InputCommandTest < Minitest::Test
     assert_equal 1, result[:actions].size
   end
 
-  def test_a_press_the_server_refuses_is_a_failure_and_no_journal_stays
+  # Ctrl-C. Ruby gives this signal an empty message, so the name has to come from elsewhere.
+  def test_an_interrupt_is_named_in_the_answer
+    press_then { Process.kill('INT', Process.pid) }
+    status, result, = key('--hold-ms', '5000')
+
+    assert_equal 130, status
+    assert_equal 'stopped by SIGINT', result[:error][:message]
+    assert_all_released
+  end
+
+  # Nothing can say the press did not land, so the journal stays for the next command to settle.
+  def test_a_press_the_server_refuses_says_what_it_left_behind
     @x.refuse_fake_input = true
     status, result, = key
+    journal = Cdctl::Input::Journal.new(Cdctl::Paths.new(@machine.env).input_dir)
 
     assert_equal 1, status
-    assert_equal 'INTERNAL_ERROR', result[:error][:code]
+    assert_equal 'INPUT_FAILED', result[:error][:code]
+    assert_equal 'next_command', result[:actions].first[:released_by]
+    assert_nil result[:changed]
+    assert_includes result[:next_steps].join, 'input release'
+    refute_nil journal.read
+
+    @x.refuse_fake_input = false
+
+    assert_equal 0, @machine.run_json('input', 'release', '--token', @token).first
+    assert_nil journal.read
   ensure
     @x.refuse_fake_input = false
+  end
+
+  def test_a_server_that_goes_silent_after_a_press_still_reports_the_press
+    press_then { @x.silent = true }
+    status, result, = key('--hold-ms', '5000')
+
+    assert_equal 1, status
+    assert_equal 'TIMEOUT', result[:error][:code]
+    assert_equal 1, result[:actions].size
+    assert_nil result[:changed]
+  ensure
+    @x.silent = false
+  end
+
+  # A signal can land inside the release. Without the journal check on the way out, the sentinel
+  # would be told everything is over, with the key still down.
+  def test_a_signal_during_the_release_leaves_it_to_the_sentinel
+    original = Cdctl::Input::Sender.instance_method(:send_item)
+    Cdctl::Input::Sender.define_method(:send_item) do |item, down:|
+      raise SignalException, 'TERM' unless down
+
+      original.bind_call(self, item, down:)
+    end
+    journal = Cdctl::Input::Journal.new(Cdctl::Paths.new(@machine.env).input_dir)
+    status, result, = key('--hold-ms', '5')
+
+    assert_equal 130, status
+    assert_equal 'INTERRUPTED', result[:error][:code]
+    assert_equal 'sentinel', result[:actions].first[:released_by]
+    assert_all_released
+    assert_nil journal.read
+  ensure
+    Cdctl::Input::Sender.define_method(:send_item, original)
+  end
+
+  # The same moment with a real signal, which unlike a raised exception can be held back: the release
+  # finishes first, so the journal is gone and the answer is that this command let go.
+  def test_a_real_signal_during_the_release_waits_for_it_to_finish
+    @x.on_fake_input = ->(type, _) { Process.kill('TERM', Process.pid) if type == KEY_RELEASE }
+    journal = Cdctl::Input::Journal.new(Cdctl::Paths.new(@machine.env).input_dir)
+    status, result, = key('--hold-ms', '5')
+
+    assert_equal 130, status
+    assert_equal 'INTERRUPTED', result[:error][:code]
+    assert_equal 'cdctl', result[:actions].first[:released_by]
+    assert_all_released
+    assert_nil journal.read
+  end
+
+  # Measured on the real game: two signals within a couple of milliseconds, the second one landing in
+  # the cleanup after the first, used to answer that nothing had been sent.
+  def test_a_second_signal_in_the_cleanup_keeps_what_was_sent_in_the_answer
+    original = Cdctl::Input::Session.instance_method(:close)
+    Cdctl::Input::Session.define_method(:close) do
+      Process.kill('INT', Process.pid)
+      sleep(0.05)
+    ensure
+      original.bind_call(self)
+    end
+    press_then { Process.kill('TERM', Process.pid) }
+    status, result, = key('--hold-ms', '5000')
+
+    assert_equal 130, status
+    assert_equal 'INTERRUPTED', result[:error][:code]
+    assert_equal 1, result[:actions].size
+    assert_nil result[:changed]
+    assert_all_released
+  ensure
+    Cdctl::Input::Session.define_method(:close, original)
+  end
+
+  def test_a_signal_while_the_answer_is_written_leaves_that_answer_alone
+    original = Cdctl::Invocation.instance_method(:failure)
+    Cdctl::Invocation.define_method(:failure) do |error|
+      Process.kill('INT', Process.pid)
+      sleep(0.05)
+      original.bind_call(self, error)
+    end
+    press_then { Process.kill('TERM', Process.pid) }
+    status, result, = key('--hold-ms', '5000')
+
+    assert_equal 130, status
+    assert_equal 'stopped by SIGTERM', result[:error][:message]
+    assert_equal 1, result[:actions].size
+  ensure
+    Cdctl::Invocation.define_method(:failure, original)
+  end
+
+  # A check that stalls makes the sentinel let go first, and the hold did not go as asked.
+  def test_a_hold_that_outlives_its_deadline_is_not_a_success
+    calls = 0
+    active = JSON.generate('pid' => 4242, 'class' => 'game', 'at' => [0, 0], 'size' => [1920, 1080], 'monitor' => 0,
+                           'fullscreen' => 2, 'workspace' => { 'name' => '1' })
+    @machine.shell.on('hyprctl', '-i', 'sig', '-j', 'activewindow') do
+      calls += 1
+      sleep(1.5) if calls == 3
+      active
+    end
+    status, result, = key('--hold-ms', '300')
+
+    assert_equal 1, status
+    assert_equal 'TIMEOUT', result[:error][:code]
+    assert_equal 'sentinel', result[:actions].first[:released_by]
+    assert_all_released
+  end
+
+  def test_one_command_acts_at_a_time_even_under_one_token
+    directory = Cdctl::Paths.new(@machine.env).input_dir
+    FileUtils.mkdir_p(directory)
+    File.open(File.join(directory, Cdctl::Input::Session::LOCK_FILE), File::RDWR | File::CREAT, 0o600) do |lock|
+      lock.flock(File::LOCK_EX)
+      status, result, = key
+
+      assert_refused 'PRECONDITION_FAILED', status, result
+      assert_includes result[:error][:message], 'another cdctl'
+    end
+    assert_equal 0, key('--hold-ms', '5').first
+  end
+
+  def test_a_move_stops_at_something_held_too
+    @x.buttons_down << 1
+    status, result, = input('move', '--x', '5', '--y', '6', '--observation', observation, '--no-capture')
+
+    assert_refused 'USER_INTERFERENCE', status, result
+  end
+
+  def test_a_move_without_the_focus_moves_nothing
+    id = observation
+    @x.focus = 0
+    status, result, = input('move', '--x', '5', '--y', '6', '--observation', id, '--no-capture')
+
+    assert_refused 'FOCUS_LOST', status, result
   end
 
   def test_a_game_closing_right_after_the_key_is_still_an_answer
@@ -634,6 +841,50 @@ class InputJournalTest < Minitest::Test
     assert_equal 'earlier', result[:data][:recovered][:request_id]
     assert_empty @x.keys_down
     assert_equal 3, @x.fake_inputs.size
+    assert_equal(%w[release key], result[:actions].map { it[:type] })
+  end
+
+  def test_what_was_settled_is_reported_even_if_the_command_then_refuses
+    leave_held({ kind: 'key', code: KEY_H })
+    @x.focus = 0
+    status, result, = @machine.run_json('input', 'key', 'a', '--no-capture', '--token', @token)
+
+    assert_equal 3, status
+    assert_equal 'FOCUS_LOST', result[:error][:code]
+    assert_equal(['release'], result[:actions].map { it[:type] })
+    assert_nil result[:changed]
+    assert_empty @x.keys_down
+  end
+
+  def test_a_press_on_another_x_server_is_left_for_whoever_can_reach_it
+    @journal.write(held: [{ kind: 'key', code: KEY_H }], display: ':9', owner: { pid: 999_999, start_ticks: 1 })
+    status, result, = @machine.run_json('input', 'release', '--token', @token)
+
+    assert_equal 3, status
+    assert_includes result[:error][:message], ':9'
+    refute_nil @journal.read
+    assert_empty @x.fake_inputs
+  end
+
+  def test_a_zombie_owner_counts_as_gone
+    @machine.add_process(777, comm: 'cdctl', argv: ['cdctl'], state: 'Z', start_ticks: 5)
+    @journal.write(held: [{ kind: 'key', code: KEY_H }], owner: { pid: 777, start_ticks: 5 })
+    @x.keys_down << KEY_H
+    status, result, = @machine.run_json('input', 'release', '--token', @token)
+
+    assert_equal 0, status
+    assert_equal 1, result[:data][:released]
+  end
+
+  def test_keys_nobody_recorded_are_said_to_be_still_down
+    @x.keys_down << 50
+    status, result, = @machine.run_json('input', 'release', '--token', @token)
+
+    assert_equal 0, status
+    refute result[:changed]
+    assert_equal 1, result[:data][:keys_still_held]
+    assert_includes result[:next_steps].join, 'no record'
+    assert_equal [50], @x.keys_down
   end
 
   def test_a_live_owner_is_left_alone
@@ -652,21 +903,37 @@ class InputJournalTest < Minitest::Test
     assert_equal 'in_progress', reported[:data][:input][:state]
   end
 
-  def test_a_damaged_journal_is_cleared_with_nothing_to_release
+  # With nothing readable there is nothing to release, and the answer must not claim otherwise.
+  def test_a_damaged_journal_is_cleared_and_said_to_be_unreadable
     FileUtils.mkdir_p(File.dirname(journal_path))
     File.write(journal_path, 'not json')
     status, result, = @machine.run_json('input', 'release', '--token', @token)
 
     assert_equal 0, status
     assert_equal 0, result[:data][:released]
+    assert result[:data][:journal_unreadable]
+    refute result[:changed]
+    assert_empty result[:actions]
     assert_nil @journal.read
   end
 
   def test_a_journal_of_the_wrong_shape_counts_as_damaged
     FileUtils.mkdir_p(File.dirname(journal_path))
-    File.write(journal_path, '[1]')
+    ['[1]', '{"owner":5}', '{"sentinel":{"pid":"x"}}', '{"held":3}', '{"held":[{"kind":"key"}]}',
+     '{"held":[{"kind":"toe","code":1}]}', "{\"held\":\"\xFF\"}"].each do |text|
+      File.binwrite(journal_path, text)
 
-    assert_equal({ damaged: true }, @journal.read)
+      assert_equal({ damaged: true }, @journal.read, text)
+    end
+  end
+
+  def test_a_damaged_journal_blocks_nothing
+    FileUtils.mkdir_p(File.dirname(journal_path))
+    File.write(journal_path, '{"owner":5}')
+
+    assert_equal 'left_held', @machine.run_json('status')[1][:data][:input][:state]
+    assert_equal 0, @machine.run_json('input', 'release', '--token', @token).first
+    assert_equal 0, @machine.run_json('input', 'key', 'a', '--hold-ms', '5', '--no-capture', '--token', @token).first
   end
 
   def test_the_journal_is_gone_after_a_normal_key
@@ -774,11 +1041,28 @@ class SentinelTest < Minitest::Test
 
   def test_a_hold_past_its_deadline_is_released_and_reported
     sentinel = start
-    sentinel.arm([ITEM], -Cdctl::Input::Sentinel::MARGIN + 0.05)
     press
+    sentinel.arm([ITEM], -Cdctl::Input::Sentinel::MARGIN + 0.05)
     wait_until('the deadline never fired') { @x.keys_down.empty? }
     seen = nil
     wait_until('it never reported') { (seen ||= sentinel.trouble) == :expired }
+    sentinel.finish
+  end
+
+  # An expiry can arrive first, and taking it for the answer would leave the real one in the pipe, to
+  # be taken for the answer to the next question.
+  def test_an_expiry_does_not_pass_for_an_answer
+    sentinel = start
+    sentinel.arm([ITEM], -Cdctl::Input::Sentinel::MARGIN + 0.01)
+    sleep(0.1)
+    sentinel.disarm
+
+    assert_predicate sentinel, :expired?
+    assert_equal :expired, sentinel.trouble
+    assert sentinel.arm([ITEM], 30)
+    refute_predicate sentinel, :expired?
+    assert_nil sentinel.trouble
+    sentinel.disarm
     sentinel.finish
   end
 
@@ -794,7 +1078,7 @@ class SentinelTest < Minitest::Test
 
   def test_it_ignores_the_signals_that_stop_a_program
     sentinel = start
-    %w[INT TERM HUP QUIT].each { Process.kill(it, sentinel.pid) }
+    %w[INT TERM HUP QUIT USR1 USR2 ALRM].each { Process.kill(it, sentinel.pid) }
     sleep(0.1)
 
     assert sentinel.arm([ITEM], 30)
@@ -921,8 +1205,8 @@ class SentinelWatchTest < Minitest::Test
   end
 
   def test_a_deadline_releases_says_so_and_keeps_watching
-    arm([{ kind: 'key', code: KEY_H }], seconds: 0.02)
     press_key
+    arm([{ kind: 'key', code: KEY_H }], seconds: 0.02)
 
     assert_equal 'expired', line
     assert_empty @x.keys_down

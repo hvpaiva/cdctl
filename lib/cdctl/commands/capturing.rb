@@ -21,6 +21,19 @@ module Cdctl
                                     pid: snapshot.process.pid, window:)
       end
 
+      # After an action: the action happened whether or not a capture can follow it, as with a dialog
+      # that opened meanwhile or a game that closed, so a failure here is no failure of the command.
+      def capture_if_possible(observer, runtime, snapshot, invocation)
+        capture(observer, runtime, snapshot, invocation)
+      rescue Error
+        nil
+      end
+
+      def notes_on(snapshot, artifact) = artifact ? capture_notes(snapshot, artifact) : snapshot.not_verified
+
+      # A snapshot cannot say what is on the screen. An answer that recognized it can.
+      def with_the_screen_known(notes) = notes - ['game.screen']
+
       # Without a compositing manager, X leaves the contents of a covered part of a window undefined,
       # and in practice returns whatever covers it.
       def capture_notes(snapshot, artifact)

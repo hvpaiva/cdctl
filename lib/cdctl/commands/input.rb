@@ -64,15 +64,9 @@ module Cdctl
         end
       end
 
-      # Only for a caller that said which screen to expect. The rest read the capture.
+      # Only for a caller that said which screen to expect. The rest read the capture. It is checked
+      # here, before anything is sent, so a name no profile knows costs no key.
       def expected_screen_before(observer, turn)
-        return nil unless turn.opts[:expect_screen]
-
-        profile = require_profile(turn.runtime, turn.snapshot)
-        eyes_for(observer, turn.snapshot, profile).look
-      end
-
-      def await_screen(observer, turn, session)
         expected = turn.opts[:expect_screen]
         return nil unless expected
 
@@ -81,22 +75,32 @@ module Cdctl
           raise Error.new("this profile does not know a screen called #{expected}", code: 'UNSUPPORTED_BUILD')
         end
 
+        eyes_for(observer, turn.snapshot, profile).look
+      end
+
+      def await_screen(observer, turn, session)
+        expected = turn.opts[:expect_screen]
+        return nil unless expected
+
+        profile = require_profile(turn.runtime, turn.snapshot)
         Driving::Navigator.new(session:, eyes: eyes_for(observer, turn.snapshot, profile), profile:,
                                window: turn.snapshot.window).wait_for([expected])
       end
 
       def finish(turn, session, match, before)
-        sleep(turn.opts[:settle_ms].to_i / 1000.0) unless turn.opts[:no_capture] || match
+        # The screen it started on says nothing: the game may not have reacted yet.
+        proved = match && before&.name != match.name
+        sleep(turn.opts[:settle_ms].to_i / 1000.0) unless turn.opts[:no_capture] || proved
         Observer.open(turn.runtime) do |observer|
           after = observer.snapshot
           artifact = evidence(observer, after, turn)
           turn.invocation.success(
             data: { modals: after.modals, activity: session.activity_report, recovered: session.recovered }.compact,
-            target: after.target || turn.snapshot.target, changed: match ? before&.name != match.name : nil,
+            target: after.target || turn.snapshot.target, changed: proved ? true : nil,
             actions: session.sender.actions, **states(turn, after, match, before),
-            verification: verification(match, artifact, turn),
-            artifacts: [artifact].compact, not_verified: notes(after, artifact, session, match),
-            next_steps: match ? [] : [CALLER_CHECKS]
+            verification: verification(match, proved, artifact, turn),
+            artifacts: [artifact].compact, not_verified: notes(after, artifact, session, proved),
+            next_steps: proved ? [] : [CALLER_CHECKS]
           )
         end
       end
@@ -106,26 +110,23 @@ module Cdctl
           after: after.fingerprint&.merge({ screen: match&.name }.compact) }
       end
 
-      def verification(match, artifact, turn)
-        screenshot = artifact&.fetch(:path, nil)
-        return { method: 'caller_required', screenshot: }.compact unless match
-
-        { method: 'visual_anchors', screenshot:, expected: turn.opts[:expect_screen], observed: match.to_h }.compact
+      def verification(match, proved, artifact, turn)
+        { method: proved ? 'visual_anchors' : 'caller_required', screenshot: artifact&.fetch(:path, nil),
+          expected: turn.opts[:expect_screen], observed: match&.to_h }.compact
       end
 
       # The game may have closed because of this input, which is an answer and not a failure.
       def evidence(observer, after, turn)
         return nil if turn.opts[:no_capture]
 
-        capture(observer, turn.runtime, after, turn.invocation)
-      rescue Error
-        nil
+        capture_if_possible(observer, turn.runtime, after, turn.invocation)
       end
 
-      def notes(after, artifact, session, match)
-        list = match ? [] : ['input.result']
-        list += artifact ? capture_notes(after, artifact) : after.not_verified
-        (list + session.not_verified).uniq
+      def notes(after, artifact, session, proved)
+        snapshot_notes = notes_on(after, artifact)
+        return (with_the_screen_known(snapshot_notes) + session.not_verified).uniq if proved
+
+        (['input.result'] + snapshot_notes + session.not_verified).uniq
       end
 
       def check_observation(runtime, snapshot, opts)
@@ -368,6 +369,8 @@ module Cdctl
       include LeaseToken
 
       NAME = 'input release'
+      HELD_BY_SOMETHING_ELSE = 'cdctl has no record of what is still down, so it cannot let go of it. Ask the person ' \
+                               'using this machine.'
 
       def self.command(factory)
         CLI::Command.new(
@@ -394,9 +397,11 @@ module Cdctl
 
       def answer(invocation, snapshot, recovered, connection)
         released = recovered&.fetch(:released) || 0
-        invocation.success(data: { released:, keys_still_held: connection.keys_held.size },
-                           target: snapshot.target, changed: !recovered.nil?,
-                           actions: recovered ? [{ type: 'release', **recovered }] : [])
+        still = connection.keys_held.size
+        data = { released:, keys_still_held: still, journal_unreadable: recovered&.fetch(:unreadable, nil) }.compact
+        invocation.success(data:, target: snapshot.target, changed: released.positive?,
+                           actions: released.positive? ? [{ type: 'release', **recovered }] : [],
+                           next_steps: still.positive? ? [HELD_BY_SOMETHING_ELSE] : [])
       end
 
       def render(context, result)

@@ -5,6 +5,7 @@ require_relative 'lease'
 require_relative '../driving'
 require_relative '../input/session'
 require_relative '../recognition/profile'
+require_relative '../x11'
 
 module Cdctl
   module Commands
@@ -18,13 +19,32 @@ module Cdctl
 
       def with_session(observer, runtime, invocation, snapshot, opts)
         Input::Session.open(**session_options(observer, runtime, invocation, snapshot, opts)) do |session|
+          @under_way = [session, snapshot]
           yield session
         rescue Error => e
           raise e.record(actions: session.sender.actions, changed: changed_by(session), target: snapshot.target)
-        rescue SignalException => e
-          raise Error.new("stopped by #{e.signm}", code: 'INTERRUPTED', actions: session.sender.actions,
-                                                   changed: changed_by(session), target: snapshot.target)
+        rescue X11::Error => e
+          raise x11_failure(e, session, snapshot)
         end
+      end
+
+      def so_far
+        session, snapshot = @under_way
+        return {} unless session
+
+        { actions: session.sender.actions, changed: changed_by(session), target: snapshot.target }
+      end
+
+      # The answer must still say what had been sent by then, and what may be left behind.
+      def x11_failure(error, session, snapshot)
+        code = error.is_a?(X11::TimeoutError) ? 'TIMEOUT' : 'INPUT_FAILED'
+        Error.new("the X server failed during the operation: #{error.message}", code:, target: snapshot.target,
+                                                                                actions: session.sender.actions,
+                                                                                changed: changed_by(session),
+                                                                                next_steps: ['Run cdctl status, and ' \
+                                                                                             'cdctl input release if ' \
+                                                                                             'it says input was left ' \
+                                                                                             'held.'])
       end
 
       def session_options(observer, runtime, invocation, snapshot, opts)

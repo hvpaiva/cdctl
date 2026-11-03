@@ -42,8 +42,9 @@ module Cdctl
 
       def success(invocation, snapshot, record, artifact, screen)
         data = snapshot.to_h.merge(observation_id: record[:id], fingerprint: record[:state], screen:)
+        notes = capture_notes(snapshot, artifact)
         invocation.success(data:, target: snapshot.target, artifacts: [artifact],
-                           not_verified: capture_notes(snapshot, artifact),
+                           not_verified: screen.known? ? with_the_screen_known(notes) : notes,
                            next_steps: screen.known? ? [] : ['Read the PNG in artifacts to see the screen.'])
       end
 

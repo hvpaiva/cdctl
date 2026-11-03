@@ -15,9 +15,11 @@ module Cdctl
 
       def call(context, args, opts)
         invocation = Invocation.new(command: self.class::NAME, request_id: request_id(opts))
-        result = attempt(invocation, context, args, opts)
-        emit(context, result, opts)
-        result.exit_status
+        answer_once do
+          result = attempt(invocation, context, args, opts)
+          emit(context, result, opts)
+          result.exit_status
+        end
       end
 
       private
@@ -28,13 +30,29 @@ module Cdctl
         raise CLI::UsageError, e.message
       end
 
+      # A signal may stop the work, and not the writing of its answer, where it would leave a second
+      # answer or lose the first. One that waited until the answer was out changes nothing.
+      def answer_once
+        status = nil
+        Thread.handle_interrupt(SignalException => :never) { status = yield }
+        status
+      rescue SignalException
+        status || raise
+      end
+
       def attempt(invocation, context, args, opts)
-        perform(invocation, @factory.call(context, opts), args, opts)
+        Thread.handle_interrupt(SignalException => :immediate) do
+          perform(invocation, @factory.call(context, opts), args, opts)
+        end
       rescue Error => e
         invocation.failure(e)
       rescue SignalException => e
-        invocation.failure(Error.new("stopped by #{e.signm}", code: 'INTERRUPTED'))
+        invocation.failure(Error.interrupted(e, **so_far))
       end
+
+      # What the answer to a signal can still say. A signal can land anywhere, even in the cleanup after
+      # an earlier one, so this is asked here and not on the way out of the work.
+      def so_far = {}
 
       def emit(context, result, opts)
         return context.puts(result.to_json_document(pretty: context.tty)) if opts[:json]

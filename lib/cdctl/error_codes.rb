@@ -24,6 +24,7 @@ module Cdctl
       'GAME_NOT_INSTALLED' => [:precondition, 'No Steam library holds the game.'],
       'GAME_NOT_RUNNING' => [:precondition, 'No game process is running.'],
       'FOCUS_LOST' => [:precondition, 'The game window lost focus during the operation.'],
+      'INPUT_FAILED' => [:failed, 'The X server stopped answering or refused input, partway through.'],
       'INTERNAL_ERROR' => [:failed, 'An unexpected failure inside cdctl.'],
       'INTERRUPTED' => [:interrupted, 'A signal stopped the operation.'],
       'INVALID_CONFIG' => [:precondition, 'The configuration file cannot be used.'],

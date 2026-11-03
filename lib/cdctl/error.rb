@@ -12,6 +12,11 @@ module Cdctl
 
     attr_reader :code, :next_steps, :data, :target, :details, :actions, :changed, :artifacts, :not_verified
 
+    # The name comes from the number, since Ruby gives SIGINT an empty message.
+    def self.interrupted(signal, **)
+      new("stopped by SIG#{Signal.signame(signal.signo)}", code: 'INTERRUPTED', **)
+    end
+
     def self.from_system_call(error, path, code: 'PRECONDITION_FAILED')
       new("#{path}: #{error.message.sub(SYSTEM_SUFFIX, '')}", code:)
     end
@@ -36,6 +41,13 @@ module Cdctl
       @actions = actions
       @changed = changed
       @target ||= target
+      self
+    end
+
+    # Adds what the code it passed through knows about the state it leaves behind.
+    def attach(data:, next_steps:)
+      @data = data
+      @next_steps = next_steps + @next_steps
       self
     end
 

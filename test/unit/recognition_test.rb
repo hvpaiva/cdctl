@@ -218,6 +218,7 @@ class ObserveScreenTest < Minitest::Test
     assert_equal 'menu.map', result[:data][:screen][:value][:name]
     assert_equal 'visual_anchors', result[:data][:screen][:source]
     assert_empty result[:next_steps]
+    refute_includes result[:not_verified], 'game.screen'
     assert_valid 'observe', result
   end
 
@@ -227,6 +228,7 @@ class ObserveScreenTest < Minitest::Test
 
     assert_equal 'unknown', result[:data][:screen][:status]
     assert_includes result[:data][:screen][:reason], 'loading'
+    assert_includes result[:not_verified], 'game.screen'
     refute_empty result[:next_steps]
   end
 
