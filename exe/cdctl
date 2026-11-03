@@ -1,0 +1,13 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# A checkout needs lib on the load path; an installed gem already has it there.
+lib = File.expand_path('../lib', __dir__)
+$LOAD_PATH.unshift(lib) unless $LOAD_PATH.include?(lib)
+
+# PNG encoding runs in a Ruby loop per pixel, which YJIT makes several times faster.
+RubyVM::YJIT.enable if defined?(RubyVM::YJIT.enable)
+
+require 'cdctl'
+
+exit Cdctl.run(ARGV)

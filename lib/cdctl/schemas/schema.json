@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "names": { "type": "array", "items": { "type": "string" } },
+    "planned": { "type": "array", "items": { "type": "string" } },
+    "name": { "type": "string" },
+    "schema": { "type": "object" }
+  }
+}

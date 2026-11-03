@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "required": ["topic", "text"],
+  "properties": {
+    "topic": { "type": "string", "description": "The command described. Empty for the program itself." },
+    "text": { "type": "string" }
+  }
+}

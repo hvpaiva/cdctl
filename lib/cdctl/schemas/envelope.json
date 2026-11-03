@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "schema_version", "request_id", "command", "ok", "status", "started_at", "duration_ms",
+    "changed", "actions", "target", "data", "artifacts", "not_verified", "error", "next_steps"
+  ],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "request_id": { "type": "string" },
+    "command": { "type": "string" },
+    "ok": { "type": "boolean" },
+    "status": {
+      "enum": ["ok", "failed", "usage_error", "precondition_failed", "unsupported", "interrupted"]
+    },
+    "started_at": { "type": "string" },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "changed": {
+      "type": "boolean",
+      "description": "Whether the command changed anything in the game or the machine."
+    },
+    "actions": {
+      "type": "array",
+      "description": "What the command really did to the game, in order. Empty for observation commands."
+    },
+    "target": {
+      "description": "The process and window this result is about, and when they were observed.",
+      "type": ["object", "null"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "start_ticks": { "type": "integer" },
+        "window": { "type": "string" },
+        "observed_at": { "type": "string" }
+      }
+    },
+    "data": { "type": ["object", "null"] },
+    "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+    "not_verified": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Facts this result does not establish. Absence from this list is not proof of anything else."
+    },
+    "error": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/error" }] },
+    "next_steps": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "details": {}
+      }
+    },
+    "fact": {
+      "description": "A claim with its origin. Known with a null value means the source was read and holds nothing.",
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["known", "unknown", "unsupported"] },
+        "value": {},
+        "source": { "type": "string" },
+        "confidence": { "enum": ["observed", "inferred"] },
+        "reason": { "type": "string" },
+        "observed_at": { "type": "string" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["kind", "path", "bytes", "sha256", "width", "height", "captured_at", "backend"],
+      "properties": {
+        "kind": { "const": "screenshot" },
+        "path": { "type": "string" },
+        "bytes": { "type": "integer" },
+        "sha256": { "type": "string" },
+        "width": { "type": "integer", "description": "Real size of the file in pixels, after zoom." },
+        "height": { "type": "integer" },
+        "zoom": { "type": "integer" },
+        "captured_at": { "type": "string" },
+        "backend": { "enum": ["x11_get_image", "grim"] },
+        "pid": { "type": "integer" },
+        "window": { "type": "string" },
+        "region": { "type": "object" },
+        "absolute_region": { "type": "object" },
+        "source_size": { "type": "object" },
+        "pixel_scale": { "type": "number" },
+        "blank_suspected": { "type": "boolean" },
+        "fallback_reason": { "type": "string" }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "required": [
+        "observed_at", "platform", "installation", "game", "x11", "window", "compositor", "modals",
+        "resolution", "settings"
+      ],
+      "properties": {
+        "observed_at": { "type": "string" },
+        "platform": { "type": "object", "required": ["os", "ruby"] },
+        "installation": {
+          "type": "object",
+          "required": ["state"],
+          "properties": {
+            "state": { "enum": ["found", "not_found", "ambiguous"] },
+            "app_id": { "type": "integer" },
+            "build_id": { "type": ["string", "null"] },
+            "build_fingerprint": { "type": "string" },
+            "language": { "type": ["string", "null"] },
+            "version": { "$ref": "#/$defs/fact" }
+          }
+        },
+        "game": {
+          "type": "object",
+          "required": ["state"],
+          "properties": {
+            "state": { "enum": ["running", "starting", "not_running", "ambiguous", "unknown", "unsupported"] },
+            "reason": { "type": "string" },
+            "pid": { "type": "integer" },
+            "display": { "type": ["string", "null"] },
+            "nested_compositor": { "type": "boolean" },
+            "evidence": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "x11": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": { "enum": ["connected", "unavailable", "timed_out"] },
+            "display": { "type": "string" },
+            "game_display": {
+              "type": "string",
+              "description": "The game's own DISPLAY, when it could not be reached and the desktop's was used."
+            },
+            "reason": { "type": "string" },
+            "extensions": { "type": "object" },
+            "xwayland": { "type": "boolean" },
+            "compositing_manager": {
+              "type": "boolean",
+              "description": "Whether a compositing manager keeps each window's pixels apart. Without one a capture can hold whatever covers the window."
+            }
+          }
+        },
+        "window": {
+          "type": "object",
+          "required": ["state"],
+          "properties": {
+            "state": { "enum": ["found", "not_found", "ambiguous", "not_applicable", "unknown"] },
+            "reason": { "type": "string" },
+            "id": { "type": "string" },
+            "width": { "type": "integer" },
+            "height": { "type": "integer" },
+            "focused": { "type": "boolean" },
+            "evidence": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "compositor": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": { "enum": ["available", "unavailable", "none"] },
+            "game_active": {
+              "type": "boolean",
+              "description": "Whether the game is the active window. Nothing about any other window is ever reported."
+            },
+            "game_client": { "type": "object", "description": "The game's own client as the compositor sees it." },
+            "monitor": { "type": "string", "description": "The monitor the compositor places the game on." }
+          }
+        },
+        "modals": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "enum": ["clear", "present", "unverified", "unavailable"],
+              "description": "present: stop and tell the person. unverified: something could be a dialog and cannot be told apart from one. unavailable: this desktop does not show those surfaces."
+            },
+            "reason": { "type": "string" },
+            "blocking": { "type": "array" },
+            "ignored": { "type": "array" }
+          }
+        },
+        "resolution": {
+          "type": "object",
+          "required": [
+            "display_mode", "game_screen", "window", "capture", "configured_override", "active",
+            "render_scale", "hud_scale", "presentation", "launch_display_mode", "coherence"
+          ],
+          "properties": {
+            "display_mode": { "$ref": "#/$defs/fact", "description": "The monitor's mode." },
+            "game_screen": { "$ref": "#/$defs/fact", "description": "The screen as the game's X server reports it." },
+            "window": { "$ref": "#/$defs/fact", "description": "The window on that screen." },
+            "capture": { "$ref": "#/$defs/fact", "description": "The size of the capture this command took." },
+            "configured_override": {
+              "$ref": "#/$defs/fact",
+              "description": "A resolution stored in the option file. Known with a null value means the file has none."
+            },
+            "active": { "$ref": "#/$defs/fact", "description": "The resolution the running game is using." },
+            "render_scale": { "$ref": "#/$defs/fact", "description": "The upscaler setting." },
+            "hud_scale": { "$ref": "#/$defs/fact" },
+            "presentation": { "$ref": "#/$defs/fact", "description": "How the image fills the window." },
+            "launch_display_mode": { "$ref": "#/$defs/fact" },
+            "coherence": {
+              "$ref": "#/$defs/fact",
+              "description": "What changed since this process was first seen: its state is consistent, window_changed or display_changed."
+            },
+            "first_seen": { "type": "object" }
+          }
+        },
+        "settings": { "type": "object", "required": ["state"] }
+      }
+    }
+  }
+}
