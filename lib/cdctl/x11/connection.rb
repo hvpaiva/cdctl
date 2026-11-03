@@ -5,12 +5,16 @@ require_relative '../x11'
 require_relative 'setup'
 require_relative 'requests'
 require_relative 'randr'
+require_relative 'xinput'
+require_relative 'xtest'
 
 module Cdctl
   module X11
     class Connection
       include Requests
       include RandR
+      include XInput
+      include XTest
 
       SOCKET_DIRECTORY = '/tmp/.X11-unix'
       DEFAULT_TIMEOUT = 2.0
@@ -21,6 +25,7 @@ module Cdctl
       FAILURE = 0
       GENERIC_EVENT = 35
       READ_CHUNK = 1 << 20
+      ROUND_TRIP = [43, 0, 1].pack('CCv').freeze
       # A frame of the largest display a game can run on fits well under this.
       MAX_REPLY_BYTES = 1 << 30
       ROOT_UID = 0
@@ -109,6 +114,33 @@ module Cdctl
         end
       end
 
+      # A request with no reply can only be refused, so a round trip behind it shows whether it was,
+      # and also that the server has processed it.
+      def checked_request(bytes, timeout: @timeout)
+        deadline = now + timeout
+        guarded do
+          write_all(bytes, deadline)
+          refusable = @sequence = (@sequence + 1) & 0xFFFF
+          write_all(ROUND_TRIP, deadline)
+          @sequence = (@sequence + 1) & 0xFFFF
+          read_reply(@sequence, deadline, refusable:)
+        end
+      end
+
+      # For a connection that asked for events. Nil when none arrives in time.
+      def next_event(timeout)
+        guarded do
+          next nil unless @socket.wait_readable(timeout)
+
+          deadline = now + @timeout
+          head = read_exact(32, deadline)
+          kind = head.getbyte(0) & 0x7F
+          kind == GENERIC_EVENT ? head + read_exact(head[4, 4].unpack1('V') * 4, deadline) : head
+        end
+      end
+
+      def monotonic_now = now
+
       private
 
       # After a timeout part of a reply may still be on its way, and the next read would take those
@@ -138,12 +170,13 @@ module Cdctl
         raise ConnectError, e.message
       end
 
-      def read_reply(expected, deadline)
+      def read_reply(expected, deadline, refusable: nil)
         loop do
           head = read_exact(32, deadline)
           kind = head.getbyte(0)
           if kind == FAILURE
-            raise RequestError.new(head.getbyte(1), head.getbyte(10)) if sequence_of(head) == expected
+            raise RequestError.new(head.getbyte(1), head.getbyte(10)) if [expected,
+                                                                          refusable].include?(sequence_of(head))
 
             next
           end

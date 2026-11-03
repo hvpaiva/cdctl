@@ -19,3 +19,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every command answers with versioned JSON under `--json`, help and the version included, and with documented exit statuses.
 - `cdctl lease` coordinates exclusive ownership of input between programs. A lease never expires by itself: a suspected orphan is reported, and ending it takes an explicit, logged takeover that fences the old token.
 - `cdctl status` reports who holds the input lease.
+- `cdctl input key`, `click`, `move` and `scroll` send guarded input to the focused game, checking the lease, the process, the geometry, the focus, system dialogs and other input before every send and during every hold.
+- A key or button is released on an error, a signal or `kill -9`, by the command, by a sentinel process or by the next command from a journal. `cdctl input release` and `cdctl status` cover the last case.

@@ -196,6 +196,205 @@ class RealXServerTest < Minitest::Test
   end
 end
 
+# Real keys on a real X server, and real kills. Only the game and /proc are fake here, so nothing can
+# reach a real game on the computer running this: the display is its own.
+class RealInputTest < Minitest::Test
+  DISPLAY_NUMBER = 92
+  WAIT = 8.0
+  ESCAPE = 0xFF1B
+
+  def setup
+    @xvfb = Xvfb.start(DISPLAY_NUMBER)
+    unless @xvfb
+      raise 'Xvfb is required here' if ENV['CDCTL_REQUIRE_XVFB']
+
+      skip 'Xvfb is not installed'
+    end
+    @machine = Machine.new
+    @machine.env['DISPLAY'] = ":#{DISPLAY_NUMBER}"
+    @machine.x11_opener = Cdctl::X11::Connection.method(:open)
+    @x = Cdctl::X11::Connection.open(":#{DISPLAY_NUMBER}")
+    @maker = RealXServerTest::WindowMaker.new(@x)
+    @machine.install_game(@machine.steam_root)
+    @machine.run_game
+    @window = @maker.create(width: 640, height: 480, x: 30, y: 40, color: 0x102030, STEAM_GAME: [Machine::APP_ID],
+                            WM_CLASS: "steam_app_#{Machine::APP_ID}\0steam_app\0", WM_NAME: 'Crimson Desert',
+                            _NET_WM_PID: [4242])
+    @maker.focus(@window)
+    @token = @machine.lease_token
+    @journal = Cdctl::Input::Journal.new(Cdctl::Paths.new(@machine.env).input_dir)
+    @children = []
+  end
+
+  def teardown
+    @children&.each do |pid|
+      Process.kill('KILL', pid)
+      Process.wait(pid)
+    rescue Errno::ESRCH, Errno::ECHILD
+      nil
+    end
+    @x&.close
+    @machine&.destroy
+    @xvfb&.stop
+  end
+
+  def input(*)
+    @machine.run_json('input', *, '--allow-unverified-dialogs', '--no-capture', '--token', @token)
+  end
+
+  # In a process of its own, since it is about to be killed.
+  def hold_in_background(milliseconds = 10_000)
+    reader, writer = IO.pipe
+    pid = fork do
+      reader.close
+      writer.write(JSON.generate(input('key', 'a', '--hold-ms', milliseconds.to_s)[1]))
+      writer.close
+      exit!(0)
+    end
+    writer.close
+    @children << pid
+    wait_until('the key was never pressed') { !@x.keys_held.empty? }
+    [pid, reader]
+  end
+
+  def wait_until(what)
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + WAIT
+    sleep(0.005) until yield || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+    flunk(what) unless yield
+  end
+
+  def result_of(pid, reader)
+    Process.wait(pid)
+    @children.delete(pid)
+    JSON.parse(reader.read, symbolize_names: true)
+  end
+
+  def kill(pid)
+    Process.kill('KILL', pid)
+    Process.wait(pid)
+    @children.delete(pid)
+  end
+
+  def test_a_real_key_goes_down_and_comes_back_up
+    status, result, = input('key', 'a', '--hold-ms', '20')
+
+    assert_equal 0, status
+    assert_equal 'cdctl', result[:actions].first[:released_by]
+    assert_empty @x.keys_held
+    assert result[:data][:activity][:watched]
+    assert_equal({ key_press: 0, button_press: 0, motion: 0 }, result[:data][:activity][:other_sources])
+  end
+
+  def test_the_keymap_of_a_real_server_has_the_usual_keys
+    ['a'.ord, 'z'.ord, ' '.ord, ESCAPE].each { refute_nil @x.keycode_for(it), it.to_s }
+  end
+
+  def test_a_kill_of_cdctl_leaves_no_key_down
+    pid, = hold_in_background
+    kill(pid)
+
+    wait_until('the key stayed down after the kill') { @x.keys_held.empty? }
+    wait_until('the journal stayed') { @journal.read.nil? }
+  end
+
+  def test_a_kill_of_cdctl_and_its_sentinel_is_recovered_by_the_journal
+    pid, = hold_in_background
+    wait_until('nothing was recorded') { @journal.read }
+    sentinel = @journal.read[:sentinel][:pid]
+    Process.kill('KILL', sentinel)
+    Process.kill('KILL', pid)
+    Process.wait(pid)
+    @children.delete(pid)
+    sleep(0.1)
+
+    assert_equal 1, @x.keys_held.size
+    assert_equal 'left_held', @machine.run_json('status')[1][:data][:input][:state]
+
+    status, result, = @machine.run_json('input', 'release', '--token', @token)
+
+    assert_equal 0, status
+    assert_equal 1, result[:data][:released]
+    assert_empty @x.keys_held
+    assert_nil @journal.read
+  end
+
+  def test_the_kill_of_the_sentinel_alone_ends_the_hold_at_once
+    pid, reader = hold_in_background
+    wait_until('nothing was recorded') { @journal.read }
+    Process.kill('KILL', @journal.read[:sentinel][:pid])
+    result = result_of(pid, reader)
+
+    assert_equal 'INTERNAL_ERROR', result[:error][:code]
+    assert_equal 'cdctl', result[:actions].first[:released_by]
+    assert_empty @x.keys_held
+    assert_nil @journal.read
+  end
+
+  def test_a_real_signal_releases_and_answers
+    pid, reader = hold_in_background
+    Process.kill('TERM', pid)
+    result = result_of(pid, reader)
+
+    assert_equal 'INTERRUPTED', result[:error][:code]
+    assert_empty @x.keys_held
+  end
+
+  def test_losing_the_real_focus_during_a_hold_releases
+    pid, reader = hold_in_background
+    other = @maker.create(width: 10, height: 10, color: 0)
+    @maker.focus(other)
+    result = result_of(pid, reader)
+
+    assert_equal 'FOCUS_LOST', result[:error][:code]
+    assert_empty @x.keys_held
+  end
+
+  # Another program on the same server, the way a tool without a lease would behave.
+  def test_another_xtest_client_during_a_hold_is_noticed
+    pid, reader = hold_in_background
+    other = Cdctl::X11::Connection.open(":#{DISPLAY_NUMBER}")
+    keycode = other.keycode_for('b'.ord)
+    other.fake_key(keycode, down: true)
+    other.fake_key(keycode, down: false)
+    other.close
+    result = result_of(pid, reader)
+
+    assert_equal 'USER_INTERFERENCE', result[:error][:code]
+    assert_includes result[:error][:message], 'XTEST'
+    assert_empty @x.keys_held
+  end
+
+  def test_a_key_held_by_something_else_stops_the_next_send
+    keycode = @x.keycode_for('b'.ord)
+    @x.fake_key(keycode, down: true)
+    status, result, = input('key', 'a')
+
+    assert_equal 3, status
+    assert_equal 'USER_INTERFERENCE', result[:error][:code]
+    assert_equal [keycode], @x.keys_held
+  ensure
+    @x.fake_key(keycode, down: false)
+  end
+
+  def test_a_real_click_lands_at_the_window_point_and_lets_go
+    observed = @machine.run_json('observe')[1][:data][:observation_id]
+    status, result, = input('click', '--x', '10', '--y', '20', '--observation', observed)
+
+    assert_equal 0, status, result.to_s
+    assert_equal [40, 60], [@x.pointer.x, @x.pointer.y]
+    assert_equal 0, @x.pointer.buttons_down
+  end
+
+  def test_a_real_wheel_turns_and_lets_go
+    observed = @machine.run_json('observe')[1][:data][:observation_id]
+    status, = input('scroll', '--x', '10', '--y', '20', '--direction', 'down', '--steps', '2', '--observation',
+                    observed)
+
+    assert_equal 0, status
+    assert_equal 0, @x.pointer.buttons_down
+  end
+end
+
 # Only commands that do not look at the machine, so this can never reach a real game on the computer
 # running it. Every other command runs in-process against a fake machine.
 class ExecutableTest < Minitest::Test

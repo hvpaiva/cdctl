@@ -9,10 +9,10 @@ module Cdctl
   # command's data. A caller needs no other file and no network to validate a result.
   module Schemas
     DIRECTORY = File.expand_path('schemas', __dir__)
-    NAMES = %w[capabilities doctor help lease.acquire lease.release lease.renew lease.status observation.check observe
-               schema screenshot status version].freeze
-    PLANNED = %w[game.continue game.launch game.quit hud.radar input.click input.key menu.back menu.open settings.get
-                 settings.list settings.plan settings.set].freeze
+    NAMES = %w[capabilities doctor help input.click input.key input.move input.release input.scroll lease.acquire
+               lease.release lease.renew lease.status observation.check observe schema screenshot status version].freeze
+    PLANNED = %w[game.continue game.launch game.quit hud.radar menu.back menu.open settings.get settings.list
+                 settings.plan settings.set].freeze
 
     module_function
 

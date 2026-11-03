@@ -175,6 +175,17 @@ class Machine
     File.write(File.join(directory, 'stat'), "#{pid} (#{comm}) #{fields}\n")
   end
 
+  # A game whose process can be told apart, on a machine with a compositor that proves it is on top.
+  def playable_game(**)
+    full_game(**)
+    hyprland
+    GAME_WINDOW
+  end
+
+  def lease_token
+    run_json('lease', 'acquire', '--owner', 'test', '--purpose', 'a test')[1][:data][:token]
+  end
+
   def run_game(pid: 4242, env: {}, parent: 1, start_ticks: 5000)
     defaults = { 'SteamAppId' => APP_ID.to_s, 'DISPLAY' => self.env['DISPLAY'], 'SECRET_TOKEN' => 'hunter2' }.compact
     add_process(pid, comm: 'CrimsonDesert.e', parent:, start_ticks:, env: defaults.merge(env),

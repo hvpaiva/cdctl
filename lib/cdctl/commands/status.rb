@@ -2,6 +2,8 @@
 
 require_relative 'base'
 require_relative 'snapshot_view'
+require_relative '../input/journal'
+require_relative '../input/session'
 require_relative '../lease'
 require_relative '../observer'
 
@@ -9,6 +11,7 @@ module Cdctl
   module Commands
     class Status < Base
       NAME = 'status'
+      LEFT_HELD = 'A killed cdctl left input held. Run cdctl input release, or send any input, to release it.'
 
       def self.command(factory)
         CLI::Command.new(
@@ -28,13 +31,16 @@ module Cdctl
         Observer.open(runtime) do |observer|
           snapshot = observer.snapshot
           snapshot.require_no_timeout!
-          invocation.success(data: snapshot.to_h.merge(lease: Lease.for(runtime).status), target: snapshot.target,
-                             not_verified: snapshot.not_verified)
+          input = Input::Session.journal_state(Input::Journal.new(runtime.paths.input_dir), runtime.proc_root)
+          invocation.success(data: snapshot.to_h.merge(lease: Lease.for(runtime).status, input:),
+                             target: snapshot.target, not_verified: snapshot.not_verified,
+                             next_steps: input[:state] == 'left_held' ? [LEFT_HELD] : [])
         end
       end
 
       def render(context, result)
-        rows(context, [*SnapshotView.rows(result.data), ['Input lease', SnapshotView.lease(result.data[:lease])]])
+        rows(context, [*SnapshotView.rows(result.data), ['Input lease', SnapshotView.lease(result.data[:lease])],
+                       ['Input left held', result.data[:input][:state] == 'left_held' ? 'yes' : 'no']])
       end
     end
   end

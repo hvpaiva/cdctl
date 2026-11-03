@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "required": ["released", "keys_still_held"],
+  "properties": {
+    "released": { "type": "integer", "description": "How many keys and buttons an interrupted command had left held." },
+    "keys_still_held": {
+      "type": "integer",
+      "description": "How many keys are down now. Which ones is not asked for: they can be a person's."
+    }
+  }
+}

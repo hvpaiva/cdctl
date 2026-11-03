@@ -8,7 +8,7 @@ module Cdctl
     # A caller reading the requirements may try these. They answer like any other result, with
     # NOT_IMPLEMENTED and exit status 4, instead of looking like a typo.
     module Planned
-      NAMES = %w[game hud input menu settings].freeze
+      NAMES = %w[game hud menu settings].freeze
 
       def self.commands
         NAMES.map do |name|

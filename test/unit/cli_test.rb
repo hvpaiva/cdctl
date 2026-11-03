@@ -22,7 +22,7 @@ class CommandLayerTest < Minitest::Test
 
   def test_exit_status_follows_the_error_category
     {
-      %w[bogus] => 2, %w[schema --nope] => 2, %w[schema bogus] => 2, %w[input key m] => 4, %w[menu open map] => 4,
+      %w[bogus] => 2, %w[schema --nope] => 2, %w[schema bogus] => 2, %w[input key m] => 3, %w[menu open map] => 4,
       %w[schema menu.open] => 4, %w[schema] => 0
     }.each do |argv, expected|
       assert_equal expected, @machine.run(*argv, '--json').first, argv.join(' ')

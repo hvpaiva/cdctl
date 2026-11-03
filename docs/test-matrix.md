@@ -10,6 +10,26 @@ real X server without the game. A setup missing from this table is untested, wha
 | 26361232 | 2.04.05 | brazilian | 3440x1440 | Hyprland 0.56.2, Xwayland | 11.0-100 | `status`, `doctor`, `capabilities`, `observe`, `observation check`, `screenshot` (X11, grim, region, zoom) | Title screen. The X11 capture matches grim with a mean difference of 0.01 in 255 |
 | 26361232 | 2.04.05 | brazilian | 1920x1080 | Hyprland 0.56.2, Xwayland | 11.0-100 | `status`, `doctor`, `capabilities`, `observe`, `observation check`, `screenshot` (X11, grim) | Title screen, with the capture guard and the stop at a system dialog in place |
 
+## Input tried against the game
+
+Build 26361232, version 2.04.05, brazilian, 1920x1080, fullscreen, Hyprland 0.56.2 with Xwayland, Proton 11.0-100, on the
+title screen and in the settings menu. A key that does nothing there was held for each case.
+
+| Case | Result |
+| --- | --- |
+| `input key` and `input click` | The game reacted: settings opened, a tab changed. The desktop's pointer did not move |
+| `kill -9` on cdctl during a hold | No key down 100 ms later, journal gone |
+| `kill -9` on cdctl and its sentinel | Key left down, `status` says `left_held`, `input release` clears it |
+| `kill -9` on the sentinel | The hold ends at once with `released_by: cdctl` |
+| `SIGTERM` during a hold | Released, `INTERRUPTED`, exit status 130 |
+| A key from the compositor's keyboard path during a hold | `USER_INTERFERENCE`, released, `key_press: 1` |
+| Another program using XTEST during a hold | `USER_INTERFERENCE`, released |
+| The focus moved to another workspace during a hold | `FOCUS_LOST`, released |
+| A real authentication prompt opened over the game during a hold | `SYSTEM_DIALOG_PRESENT`, released after 651 ms |
+| The same prompt while idle | `status` says `present`; `observe`, `screenshot` and `input` answer `SYSTEM_DIALOG_PRESENT`. X11 and the compositor both still say the game has the focus |
+
+Motion from a real mouse has not been tried. A warp by the compositor produces no raw motion event.
+
 ## Measured on the same setup, without running cdctl
 
 - The compositor answers whether the session is locked, and lists the desktop's bar and dock on the top layer. A
@@ -26,8 +46,8 @@ real X server without the game. A setup missing from this table is untested, wha
 - Any other language or build.
 - A capture while the game window is not focused or is on a hidden workspace. Until this is tested, such a result
   lists `capture.frame_is_current` under `not_verified`.
-- A real authentication prompt over the game seen by `modals`, a locked session, and a game that is not fullscreen
-  under a surface on the top layer. These rules are covered by automated tests only.
+- A locked session, and a game that is not fullscreen under a surface on the top layer. These rules are covered by
+  automated tests only.
 
 ## Automated, without the game
 

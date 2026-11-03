@@ -29,6 +29,7 @@ capture/        Frames, PNG writing and the capture backends.
 ledger.rb       First sighting of each process, for detecting later display changes.
 observation_store.rb  What a caller last saw, for refusing stale coordinates.
 lease.rb, lease/      Exclusive ownership of input between programs.
+input/          Guards, the sentinel, the journal and the watch on other input.
 
 capabilities.rb What works here, proven by trying it.
 doctor.rb       What is missing here, and how to fix it.
@@ -88,6 +89,34 @@ explicit, logged takeover. Each acquire raises a generation, and a token is chec
 lock, so a message delayed from an old owner can neither end a newer lease nor revive a finished one. The file stores a
 hash of the token. A process id alone would prove little here, since the shell running one command dies right after it,
 so only a process the caller names with `--holder-pid` counts.
+
+### A key is never left down
+
+The X server keeps a key pressed until someone releases it, whoever pressed it and whether or not they still exist. An
+`ensure` block covers errors and signals, and nothing covers `SIGKILL`, so three layers hand off to each other:
+
+1. The command releases in `ensure`.
+2. A sentinel, forked before the press, runs in its own session, ignores ordinary signals and watches a pipe from the
+   command. If the pipe closes without a "done", or a hold outlives its deadline, it releases. If the sentinel dies, the
+   command sees its pipe close and ends the hold.
+3. A journal is on disk before the press. If both processes die together, `status` reports it and the next `input`
+   command releases exactly what it names, before sending anything else.
+
+The press waits for the sentinel to confirm, so nothing is ever held without cover. What is under test is what happens
+when a process dies, so `test/integration` kills real ones against a real X server.
+
+### A person outranks a lease
+
+A lease cannot stop the person at the keyboard, so input watches for them. XI2 raw events carry a source device, and
+everything a person does through the compositor arrives from a device other than XTEST, while another program using
+XTEST shows up as more XTEST events than cdctl sent. A key or a button stops the send, and so does more than a little
+pointer motion, since a hand resting on a mouse produces a few events. Those events hold keycodes, and they are never
+read: only the type and the device leave `X11::XInput`, so this cannot log what someone types. `QueryKeymap` before each
+press catches a key already held, and its answer is reduced to a count for the same reason.
+
+Focus alone is not enough. With a real authentication dialog open over the game, both the X server and the compositor
+still report the game as focused, measured on the tested setup. Only the surface on the overlay layer shows the dialog,
+which is why input checks `modals` before every send and every quarter of a second during a hold.
 
 ### Unknown is an answer
 
