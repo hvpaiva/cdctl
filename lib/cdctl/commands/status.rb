@@ -2,6 +2,7 @@
 
 require_relative 'base'
 require_relative 'snapshot_view'
+require_relative '../lease'
 require_relative '../observer'
 
 module Cdctl
@@ -27,12 +28,13 @@ module Cdctl
         Observer.open(runtime) do |observer|
           snapshot = observer.snapshot
           snapshot.require_no_timeout!
-          invocation.success(data: snapshot.to_h, target: snapshot.target, not_verified: snapshot.not_verified)
+          invocation.success(data: snapshot.to_h.merge(lease: Lease.for(runtime).status), target: snapshot.target,
+                             not_verified: snapshot.not_verified)
         end
       end
 
       def render(context, result)
-        rows(context, SnapshotView.rows(result.data))
+        rows(context, [*SnapshotView.rows(result.data), ['Input lease', SnapshotView.lease(result.data[:lease])]])
       end
     end
   end

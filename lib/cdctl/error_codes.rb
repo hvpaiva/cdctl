@@ -28,6 +28,8 @@ module Cdctl
       'INTERRUPTED' => [:interrupted, 'A signal stopped the operation.'],
       'INVALID_CONFIG' => [:precondition, 'The configuration file cannot be used.'],
       'LEASE_BUSY' => [:precondition, 'Another owner holds the input lease.'],
+      'LEASE_LOST' => [:precondition, 'This token no longer holds the lease.'],
+      'LEASE_REQUIRED' => [:precondition, 'Sending input needs a lease token.'],
       'NOT_IMPLEMENTED' => [:unsupported, 'This version of cdctl does not implement the command.'],
       'OBSERVATION_NOT_FOUND' => [:precondition, 'No stored observation has this id.'],
       'OBSERVATION_STALE' => [:precondition, 'The observation is older than the allowed age.'],

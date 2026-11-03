@@ -28,6 +28,7 @@ resolution.rb   Every number called a resolution, kept apart.
 capture/        Frames, PNG writing and the capture backends.
 ledger.rb       First sighting of each process, for detecting later display changes.
 observation_store.rb  What a caller last saw, for refusing stale coordinates.
+lease.rb, lease/      Exclusive ownership of input between programs.
 
 capabilities.rb What works here, proven by trying it.
 doctor.rb       What is missing here, and how to fix it.
@@ -74,6 +75,19 @@ more thing that differs between machines.
 Nothing keeps running between commands. The cost is that a display mode at launch is known only when cdctl itself
 launched the game; for a game started elsewhere, the ledger records the first sighting and detects changes from there.
 Before that sighting the answer is unknown.
+
+### A lease never expires
+
+Two programs on one machine must not send input at once, and a JSON file alone cannot stop that, so each change happens
+under `flock` and lands with an atomic rename. `flock` ends with its process, so a crash leaves no lock behind, and the
+rename means a crash leaves the previous state whole.
+
+Expiry is the tempting design and the wrong one: a slow owner would lose its lease without knowing, and the next owner
+would act over it. So time, a dead process and a restart only raise `orphan.suspected`, and ending a lease takes an
+explicit, logged takeover. Each acquire raises a generation, and a token is checked against the current holder under the
+lock, so a message delayed from an old owner can neither end a newer lease nor revive a finished one. The file stores a
+hash of the token. A process id alone would prove little here, since the shell running one command dies right after it,
+so only a process the caller names with `--holder-pid` counts.
 
 ### Unknown is an answer
 

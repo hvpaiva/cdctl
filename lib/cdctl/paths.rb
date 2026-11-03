@@ -32,6 +32,10 @@ module Cdctl
 
     def sessions_dir = File.join(state_home, 'sessions')
 
+    def lease_dir = File.join(state_home, 'lease')
+
+    def input_dir = File.join(state_home, 'input')
+
     def runtime_dir
       value = present(@env['XDG_RUNTIME_DIR'])
       return value if value && File.absolute_path?(value)

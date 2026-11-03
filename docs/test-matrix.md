@@ -8,9 +8,7 @@ real X server without the game. A setup missing from this table is untested, wha
 | Build | Version | Language | Resolution | Desktop | Proton | Commands | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 26361232 | 2.04.05 | brazilian | 3440x1440 | Hyprland 0.56.2, Xwayland | 11.0-100 | `status`, `doctor`, `capabilities`, `observe`, `observation check`, `screenshot` (X11, grim, region, zoom) | Title screen. The X11 capture matches grim with a mean difference of 0.01 in 255 |
-| 26361232 | 2.04.05 | brazilian | 1920x1080 | Hyprland 0.56.2, Xwayland | 11.0-100 | The X11 capture path only, not the commands | Settings menu. The X11 capture matches grim with a mean difference of 0.11 in 255 |
-
-These runs came before the capture guard and the stop at a system dialog, which so far have automated tests only.
+| 26361232 | 2.04.05 | brazilian | 1920x1080 | Hyprland 0.56.2, Xwayland | 11.0-100 | `status`, `doctor`, `capabilities`, `observe`, `observation check`, `screenshot` (X11, grim) | Title screen, with the capture guard and the stop at a system dialog in place |
 
 ## Measured on the same setup, without running cdctl
 

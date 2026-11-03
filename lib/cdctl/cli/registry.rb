@@ -5,7 +5,7 @@ require_relative 'errors'
 
 module Cdctl
   module CLI
-    SECTION_ORDER = ['Discovery Commands', 'Observation Commands', 'Other Commands'].freeze
+    SECTION_ORDER = ['Discovery Commands', 'Observation Commands', 'Control Commands', 'Other Commands'].freeze
 
     # `long` has no dashes, and a nil `argument` makes a boolean flag. An `optional` option takes
     # its value only attached (--long=VALUE) and stores `implicit` when it is omitted.

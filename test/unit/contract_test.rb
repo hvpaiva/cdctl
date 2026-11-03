@@ -326,7 +326,7 @@ class CapabilitiesTest < Minitest::Test
   end
 
   def test_planned_work_is_listed_as_such
-    %w[input.key input.click lease game.launch game.quit menu.open settings.set].each do |id|
+    %w[input.key input.click game.launch game.quit menu.open settings.set].each do |id|
       assert_equal 'not_implemented', capability(id)[:state], id
     end
   end

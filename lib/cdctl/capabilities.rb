@@ -17,7 +17,6 @@ module Cdctl
     PLANNED = [
       ['input.key', %w[input key], 'Send a guarded key press with a guaranteed release'],
       ['input.click', %w[input click], 'Send a guarded click in window coordinates'],
-      ['lease', %w[lease], 'Exclusive ownership of input between agents'],
       ['game.launch', %w[game launch], 'Start the game through Steam and wait for it'],
       ['game.continue', %w[game continue], 'Continue the saved game from the title screen'],
       ['game.quit', %w[game quit], 'Quit through the game menu and confirm the process ended'],
@@ -49,8 +48,13 @@ module Cdctl
     def x11_connected? = @snapshot.x11[:status] == 'connected'
 
     def capabilities
-      [discovery, build, process, window, resolution, modals, capture_x11, capture_grim, option_file, screen,
+      [discovery, build, process, window, resolution, modals, capture_x11, capture_grim, option_file, screen, lease,
        *planned, hud]
+    end
+
+    def lease
+      entry('lease', 'available', 'Exclusive ownership of input between programs', ['lease status', 'lease acquire',
+                                                                                    'lease renew', 'lease release'])
     end
 
     def entry(id, state, summary, commands, reason = nil)

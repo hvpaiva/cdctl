@@ -67,6 +67,7 @@ New to it as an agent? Read [the agent guide](docs/agent-guide.md).
 | `cdctl observe` | Captures the game window and stores an observation |
 | `cdctl screenshot` | Captures the game window to a PNG, with a region and a zoom that repeats pixels |
 | `cdctl observation check ID` | Says whether a stored observation still describes the game |
+| `cdctl lease status\|acquire\|renew\|release` | Coordinates exclusive ownership of input between programs |
 
 `cdctl COMMAND --help` documents each one.
 
@@ -167,6 +168,7 @@ Nothing is required. Everything is discovered.
 | `CDCTL_STEAM_ROOT` | Use this Steam directory instead of searching |
 | `CDCTL_STATE_HOME` | Where captures and observations are stored |
 | `CDCTL_CONFIG` | The configuration file, by default `$XDG_CONFIG_HOME/cdctl/config.yaml` |
+| `CDCTL_LEASE_TOKEN` | The lease token, kept off the command line |
 | `CDCTL_COLOR` | When to use color: `auto`, `always` or `never` |
 
 The configuration file accepts `steam_root`, `ignored_overlay_layers` (surfaces that are not dialogs,
@@ -178,8 +180,9 @@ It reads Steam's library and manifest files, `/proc`, the game's X server, the c
 the game's option file. It never writes to the game, its saves or its settings.
 
 It writes only under `$XDG_STATE_HOME/cdctl`, with files readable by their owner alone: captures, which
-can show what is on your screen, and small records of observations. Old ones are pruned. It reads a
-fixed list of variables from the game's environment and prints none but `DISPLAY`.
+can show what is on your screen, small records of observations, and the input lease with its history.
+Old captures and observations are pruned. It reads a fixed list of variables from the game's environment
+and prints none but `DISPLAY`.
 
 ## Remove it
 

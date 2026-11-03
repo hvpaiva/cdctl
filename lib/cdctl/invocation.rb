@@ -8,12 +8,14 @@ require_relative 'error'
 module Cdctl
   # The contract every command answers with. Keys stay in this order so a human reading raw JSON
   # sees the outcome first.
-  Result = Data.define(:request_id, :command, :ok, :status, :started_at, :duration_ms, :target, :data, :artifacts,
-                       :not_verified, :error, :next_steps, :exit_status) do
+  Result = Data.define(:request_id, :command, :ok, :status, :started_at, :duration_ms, :changed, :actions, :before,
+                       :after, :verification, :target, :data, :artifacts, :not_verified, :error, :next_steps,
+                       :exit_status) do
     def to_h
       {
         schema_version: Result::SCHEMA_VERSION, request_id:, command:, ok:, status:, started_at:, duration_ms:,
-        changed: false, actions: [], target:, data:, artifacts:, not_verified:, error:, next_steps:
+        changed:, actions:, **{ before:, after:, verification: }.compact, target:, data:, artifacts:, not_verified:,
+        error:, next_steps:
       }
     end
 
@@ -58,19 +60,23 @@ module Cdctl
       @started = monotonic
     end
 
-    def success(data:, target: nil, artifacts: [], not_verified: [], next_steps: [])
-      build(ok: true, status: 'ok', data:, target:, artifacts:, not_verified:, error: nil, next_steps:, exit_status: 0)
+    def success(data:, target: nil, artifacts: [], not_verified: [], next_steps: [], changed: false, actions: [],
+                before: nil, after: nil, verification: nil)
+      build(ok: true, status: 'ok', data:, target:, artifacts:, not_verified:, error: nil, next_steps:, exit_status: 0,
+            changed:, actions:, before:, after:, verification:)
     end
 
-    def failure(error, not_verified: [])
-      build(ok: false, status: error.result_status, data: error.data, target: error.target, artifacts: [],
-            not_verified:, error: error_body(error), next_steps: error.next_steps, exit_status: error.exit_status)
+    def failure(error)
+      build(ok: false, status: error.result_status, data: error.data, target: error.target, artifacts: error.artifacts,
+            not_verified: error.not_verified, error: error_body(error), next_steps: error.next_steps,
+            exit_status: error.exit_status, changed: error.changed, actions: error.actions)
     end
 
     private
 
-    def build(**fields)
-      Result.new(request_id:, command:, started_at: @started_at.iso8601(3), duration_ms: elapsed, **fields)
+    def build(before: nil, after: nil, verification: nil, **fields)
+      Result.new(request_id:, command:, started_at: @started_at.iso8601(3), duration_ms: elapsed, before:, after:,
+                 verification:, **fields)
     end
 
     def error_body(error)
