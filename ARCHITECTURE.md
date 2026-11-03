@@ -30,6 +30,9 @@ ledger.rb       First sighting of each process, for detecting later display chan
 observation_store.rb  What a caller last saw, for refusing stale coordinates.
 lease.rb, lease/      Exclusive ownership of input between programs.
 input/          Guards, the sentinel, the journal and the watch on other input.
+recognition/    Signatures, anchors and profiles: which screen is on the window.
+driving.rb      Moving between recognized screens.
+profiles/       What was measured on the real game, per build, language and aspect ratio.
 
 capabilities.rb What works here, proven by trying it.
 doctor.rb       What is missing here, and how to fix it.
@@ -73,8 +76,8 @@ more thing that differs between machines.
 
 ### No service
 
-Nothing keeps running between commands. The cost is that a display mode at launch is known only when cdctl itself
-launched the game; for a game started elsewhere, the ledger records the first sighting and detects changes from there.
+Nothing keeps running between commands. The cost is that a display mode at launch is known only when `cdctl game launch`
+started the game; for a game started elsewhere, the ledger records the first sighting and detects changes from there.
 Before that sighting the answer is unknown.
 
 ### A lease never expires
@@ -95,10 +98,12 @@ so only a process the caller names with `--holder-pid` counts.
 The X server keeps a key pressed until someone releases it, whoever pressed it and whether or not they still exist. An
 `ensure` block covers errors and signals, and nothing covers `SIGKILL`, so three layers hand off to each other:
 
-1. The command releases in `ensure`.
+1. The command releases in `ensure`, with signals held back until the key is up, since a signal landing in the cleanup was
+   measured to leave the key down.
 2. A sentinel, forked before the press, runs in its own session, ignores ordinary signals and watches a pipe from the
    command. If the pipe closes without a "done", or a hold outlives its deadline, it releases. If the sentinel dies, the
-   command sees its pipe close and ends the hold.
+   command sees its pipe close and ends the hold. The command says "done" only with the journal gone, so nothing that goes
+   wrong on the way out can dismiss it with a key still down.
 3. A journal is on disk before the press. If both processes die together, `status` reports it and the next `input`
    command releases exactly what it names, before sending anything else.
 
@@ -117,6 +122,45 @@ press catches a key already held, and its answer is reduced to a count for the s
 Focus alone is not enough. With a real authentication dialog open over the game, both the X server and the compositor
 still report the game as focused, measured on the tested setup. Only the surface on the overlay layer shows the dialog,
 which is why input checks `modals` before every send and every quarter of a second during a hold.
+
+### Screens are told apart by reduced signatures
+
+The repository holds no game pixels. An anchor is a rectangle, in fractions of the window height, and a small grid of
+averages from that rectangle, with cells too large for a letter or an icon to be read back. Correlation between grids
+ignores brightness and contrast, so a label matches over a light map as it does over a dark forest. Luma recognizes text
+and icons. A warm channel, how much redder than blue a pixel is, tells a selected entry from the others whatever is behind
+it. On 83 real frames, the screens in the first profile were all told apart: an anchor scores 0.97 to 1.00 where it
+belongs and at most 0.66 elsewhere, in about 30 ms for the whole frame.
+
+Everything that varies is in the profile, keyed by build, language and aspect ratio. Outside it, recognition answers
+unknown with the reason, and commands that need it answer `UNSUPPORTED_BUILD` without sending anything. A screen known only
+by the HUD is also tied to the HUD scale it was measured with. A profile placed under `$XDG_DATA_HOME/cdctl/profiles`
+takes precedence over what ships.
+
+### One input, then wait
+
+Menus in this game stall for seconds at a time and present no new frame meanwhile, so an input that looks ignored has
+usually just not shown yet. Measured: a key pressed during a stall appeared to do nothing, and the next one seemed to
+apply to the previous screen. The same stall makes a second key dangerous, since `M` on an open map closes it. So each
+step sends once and then waits for the screen it expects, up to a timeout, and fails instead of trying again. A screen
+counts only after two looks in a row, since a frame in a transition can match by chance, and the next input waits a moment
+longer, because a click right after a menu appeared was seen to do nothing while the same click later worked. A stall can
+also outlast the wait, so an input that got no answer is remembered, and for 30 seconds the next command will not send
+from that same screen. An entry inside a menu or a row in a list is seen before it is clicked, since a tab says which menu
+is open and nothing about what its list holds. That look waits, because a list was measured to draw about a second and a
+half after its tab.
+
+Routes come from the transitions in the profile, all observed on the game, and are searched from wherever the game really
+is. Some hold only in one context: Escape from the settings returns to wherever they were opened from, and what is on the
+screen says which.
+
+### A setting changes only through the menu, and the file is the proof
+
+cdctl never edits the option file. `settings set` predicts the one element that should change and the value it should
+hold, walks the menu, confirms the dialog once it is recognized, and compares the file once it has held still for a
+second, since a write can be followed by another. Only the ids the game regenerates on every save are left out, so any
+other difference fails, with the way back in the answer. Measured: applying the other keyboard preset removes exactly
+that element from the file, and applying it back returns the same values in the same order.
 
 ### Unknown is an answer
 
@@ -143,8 +187,8 @@ The field appeared in 4 of 38 stored option files, each time with a resolution c
 the screen. The likely rule is that it exists only when the choice differs from the screen, and that without it the
 game follows the screen at launch. That rule has not been tested on purpose, so cdctl reports the field and does not
 predict from it, beyond inferring `stretched` or `native` from a stored resolution. With no stored resolution it answers
-unknown: a mode changed after the launch leaves a window that fills the screen around an image of the old size, and
-cdctl did not see the launch.
+unknown: a mode changed after the launch leaves a window that fills the screen around an image of the old size, unless
+cdctl itself launched the game and recorded the display at that moment.
 
 The game writes the file when settings are applied and not when it starts: a running process was seen to be two hours
 newer than the file. So a file older than the process is the one the process read, and a newer one may describe nothing

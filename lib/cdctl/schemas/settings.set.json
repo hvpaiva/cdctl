@@ -1,0 +1,19 @@
+{
+  "allOf": [
+    { "$ref": "#/$defs/setting_change" },
+    {
+      "type": "object",
+      "required": ["applied"],
+      "properties": {
+        "applied": { "type": "boolean", "description": "False means no change was confirmed." },
+        "real_changes": {
+          "type": "array",
+          "description": "What really differs in the option file, leaving out the ids the game regenerates."
+        },
+        "modals": { "$ref": "#/$defs/snapshot/properties/modals" },
+        "activity": { "$ref": "#/$defs/input_activity" },
+        "steps": { "type": "integer" }
+      }
+    }
+  ]
+}

@@ -14,19 +14,21 @@ module Cdctl
     # The setups tried against the real game, recorded in docs/test-matrix.md.
     TESTED_COMPOSITORS = %w[hyprland].freeze
 
-    PLANNED = [
-      ['game.launch', %w[game launch], 'Start the game through Steam and wait for it'],
-      ['game.continue', %w[game continue], 'Continue the saved game from the title screen'],
-      ['game.quit', %w[game quit], 'Quit through the game menu and confirm the process ended'],
-      ['menu.open', %w[menu open], 'Reach a menu and verify it, without toggling it closed'],
-      ['settings.set', %w[settings set], 'Change one setting through the menu and verify it'],
-      ['diagnostics.performance', %w[diagnostics], 'Frame time, VRAM and logs with sources']
+    PLANNED = [['diagnostics.performance', %w[diagnostics], 'Frame time, VRAM and logs with sources']].freeze
+    # Semantic commands run only where a profile covers the build, the language and the aspect ratio.
+    SEMANTIC = [
+      ['game.continue', ['game continue'], 'Continue the saved game from the title screen'],
+      ['game.quit', ['game quit'], 'Quit through the game menu and confirm the process ended'],
+      ['menu.open', ['menu open', 'menu back'], 'Reach a menu and verify it, without toggling it closed'],
+      ['settings.set', ['settings set'], 'Change one setting through the menu and verify the file']
     ].freeze
 
-    def initialize(snapshot:, connection:, shell:)
+    def initialize(snapshot:, connection:, shell:, profile: nil, profile_reason: nil)
       @snapshot = snapshot
       @connection = connection
       @shell = shell
+      @profile = profile
+      @profile_reason = profile_reason
     end
 
     def to_h
@@ -47,7 +49,29 @@ module Cdctl
 
     def capabilities
       [discovery, build, process, window, resolution, modals, capture_x11, capture_grim, option_file, screen, lease,
-       input, watching_input, *planned, hud]
+       input, watching_input, launch, *semantic, settings_read, *planned, hud]
+    end
+
+    def launch
+      entry('game.launch', 'unverified', 'Start the game through Steam and wait for it', ['game launch'],
+            'not tried here, because trying means starting the game')
+    end
+
+    def semantic
+      SEMANTIC.map do |id, commands, summary|
+        if @profile
+          entry(id, 'unverified', summary, commands, 'not tried here, because trying means sending input')
+        else
+          entry(id, 'unsupported', summary, [], @profile_reason || 'no profile covers this game')
+        end
+      end
+    end
+
+    def settings_read
+      summary = 'List and read the settings a profile names, from the option file'
+      commands = ['settings list', 'settings get', 'settings plan']
+      entry('settings.read', @snapshot.installation ? 'available' : 'unavailable', summary, commands,
+            @snapshot.installation ? nil : 'the game installation was not found')
     end
 
     # Proving this would mean sending something to the game, which nothing here may do on its own.
@@ -185,8 +209,10 @@ module Cdctl
     end
 
     def screen
-      entry('observe.screen', 'not_implemented', 'Recognize the current screen', %w[observe],
-            'no UI profile exists yet, so observe returns an image and screen unknown')
+      summary = 'Recognize the current screen, from reduced signatures of its labels'
+      return entry('observe.screen', 'available', summary, %w[observe]) if @profile
+
+      entry('observe.screen', 'unsupported', summary, [], @profile_reason || 'no profile covers this game')
     end
 
     def planned

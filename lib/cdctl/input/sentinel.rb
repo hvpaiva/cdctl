@@ -17,7 +17,7 @@ module Cdctl
       # A hold ends on time unless something is wrong, so this only has to outlast a slow check.
       MARGIN = 1.0
       EXIT_TIMEOUT = 2.0
-      DEAF_TO = %w[INT TERM HUP QUIT PIPE].freeze
+      DEAF_TO = %w[INT TERM HUP QUIT PIPE USR1 USR2 ALRM].freeze
       STANDARD_STREAMS = [0, 1, 2].freeze
       DONE = 'done'
       READY = 'ready'
@@ -74,6 +74,7 @@ module Cdctl
         @write = write
         @read = read
         @gone = false
+        @expired = false
       end
 
       def wait_until_ready
@@ -85,6 +86,7 @@ module Cdctl
 
       # Waits for the answer, because a press must not happen before the release is covered.
       def arm(items, seconds)
+        @expired = false
         send_line(JSON.generate(held: items, seconds: seconds + MARGIN))
         answered?(ARMED) or raise Unavailable, 'the process that guarantees the release did not answer'
       end
@@ -98,14 +100,16 @@ module Cdctl
 
       # What went wrong on its side, if anything: :expired or :gone.
       def trouble
-        return :gone if @gone
-        return nil unless @read.wait_readable(0)
-
-        line = read_line
-        @gone = line.nil?
+        take_pending
         return :gone if @gone
 
-        line == EXPIRED ? :expired : nil
+        @expired ? :expired : nil
+      end
+
+      # Whether it already released what was armed, because a hold outlived its deadline.
+      def expired?
+        take_pending
+        @expired
       end
 
       def finish
@@ -129,10 +133,30 @@ module Cdctl
         raise Unavailable, 'the process that guarantees the release is gone'
       end
 
+      # An expiry can be on its way at any moment, so it is taken note of and the answer is still
+      # waited for. Taking it as the answer would leave the real one for the next question.
       def answered?(expected)
-        return false unless @read.wait_readable(READY_TIMEOUT)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + READY_TIMEOUT
+        loop do
+          left = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          return false unless left.positive? && @read.wait_readable(left)
 
-        read_line == expected
+          line = read_line
+          return true if line == expected
+          return false unless line == EXPIRED
+
+          @expired = true
+        end
+      end
+
+      def take_pending
+        while !@gone && @read.wait_readable(0)
+          line = read_line
+          @gone = line.nil?
+          @expired ||= line == EXPIRED
+        end
+      rescue IOError
+        @gone = true
       end
 
       def read_line

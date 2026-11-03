@@ -18,7 +18,8 @@ locally and required in CI. Nothing in it looks at your machine's game: `package
 - Unknown is a valid answer. Never fill in a value because it is usually true.
 - A new way of acting on the game needs a precondition, a verification and a release of anything it holds, in that order.
 - Tests never touch a real game. Use the fakes in `test/support`.
-- Real captures of the game do not enter the repository. `test/fixtures/real/` is ignored for that reason.
+- Real captures of the game do not enter the repository. `test/fixtures/real/` is ignored for that reason. A profile holds
+  reduced signatures only, and a test refuses cells small enough to read anything back from.
 - Comments say why, never what. No tool demands a comment on every class or method.
 
 ## Commits and pull requests

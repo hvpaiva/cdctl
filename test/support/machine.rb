@@ -32,6 +32,11 @@ class FakeShell
     stdout = entry[:block] ? entry[:block].call(argv) : entry[:stdout]
     Cdctl::Shell::Output.new(stdout:, stderr: entry[:stderr], exit_status: entry[:status])
   end
+
+  def start_detached(*argv, wait: nil)
+    _ = wait
+    run(*argv)
+  end
 end
 
 # A complete imaginary computer: a home directory, a /proc, optional Steam trees, an optional X

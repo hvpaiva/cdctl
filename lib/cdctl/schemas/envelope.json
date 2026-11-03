@@ -105,6 +105,35 @@
         "fallback_reason": { "type": "string" }
       }
     },
+    "setting": {
+      "type": "object",
+      "required": ["name", "source", "editable"],
+      "properties": {
+        "name": { "type": "string" },
+        "section": { "type": "string" },
+        "label": { "type": "string", "description": "What the menu calls it, in this profile's language." },
+        "value": { "description": "The value by its neutral name, or null where the file holds nothing this profile can name." },
+        "raw": { "description": "What the file holds. Null means the file omits it." },
+        "source": { "const": "option_file" },
+        "editable": { "type": "boolean" },
+        "options": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "setting_change": {
+      "type": "object",
+      "required": ["setting", "from", "to", "file_change", "restore"],
+      "properties": {
+        "setting": { "type": "string" },
+        "from": {},
+        "to": { "type": "string" },
+        "raw_from": {},
+        "raw_to": {},
+        "file_change": { "type": "object", "description": "The one element the option file should change." },
+        "label": { "type": "string" },
+        "restore": { "type": "string", "description": "The command that undoes this." },
+        "needed": { "type": "boolean", "description": "False means it already has this value." }
+      }
+    },
     "input_activity": {
       "type": "object",
       "required": ["watched"],
@@ -179,7 +208,7 @@
           "type": "object",
           "required": ["state"],
           "properties": {
-            "state": { "enum": ["running", "starting", "not_running", "ambiguous", "unknown", "unsupported"] },
+            "state": { "enum": ["running", "starting_or_closing", "not_running", "ambiguous", "unknown", "unsupported"] },
             "reason": { "type": "string" },
             "pid": { "type": "integer" },
             "display": { "type": ["string", "null"] },

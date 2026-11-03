@@ -65,6 +65,38 @@ class ShellTest < Minitest::Test
     end
   end
 
+  # With Steam closed, asking it to start a game stays running as Steam itself.
+  def test_a_program_started_detached_is_left_running
+    Dir.mktmpdir do |directory|
+      pid_file = File.join(directory, 'pid')
+      script = "File.write(#{pid_file.inspect}, Process.pid.to_s); sleep"
+      output = shell.start_detached(RbConfig.ruby, '-e', script, wait: 0.5)
+      pid = Integer(File.read(pid_file))
+
+      assert_nil output.exit_status
+      assert Process.kill(0, pid)
+    ensure
+      Process.kill('KILL', pid) if pid
+    end
+  end
+
+  def test_a_program_started_detached_that_ends_says_how
+    assert_equal 3, shell.start_detached(RbConfig.ruby, '-e', 'exit 3', wait: 5).exit_status
+  end
+
+  def test_a_program_started_detached_that_is_missing_is_not_available
+    assert_raises(Cdctl::Shell::NotAvailable) { shell.start_detached('/nonexistent/program') }
+  end
+
+  def test_the_lease_token_does_not_reach_what_is_started
+    ENV['CDCTL_LEASE_TOKEN'] = 'secret'
+    output = shell.run(RbConfig.ruby, '-e', 'print ENV.fetch("CDCTL_LEASE_TOKEN", "absent")')
+
+    assert_equal 'absent', output.stdout
+  ensure
+    ENV.delete('CDCTL_LEASE_TOKEN')
+  end
+
   def test_adds_the_given_environment
     assert_equal 'yes', shell('CDCTL_TEST' => 'yes').run(RbConfig.ruby, '-e', 'print ENV["CDCTL_TEST"]').stdout
   end

@@ -21,6 +21,7 @@ module Cdctl
       MAX_BYTES = 4 * 1024 * 1024
       SOURCE = 'option_file'
       VALUE_ATTRIBUTES = %w[_value _select].freeze
+      IDENTIFYING_ATTRIBUTES = %w[Name IdBase ItemID].freeze
 
       attr_reader :path, :modified_at
 
@@ -67,6 +68,32 @@ module Cdctl
 
       # The raw value. What it means in the menu belongs to a UI profile.
       def keyboard_mouse_preset = fact('_keyboardMousePresetOptionType', '_select')
+
+      # A value by element name, as a fact with where it came from.
+      def value_of(name, attribute) = fact(name, attribute)
+
+      # Everything in the file by its path, leaving out only the serialization ids, which the game
+      # regenerates when it saves and which say nothing about any setting. Anything else counts, since
+      # a change nobody asked for is what a comparison is for. Siblings without a name share a path,
+      # so their order tells them apart.
+      def settings
+        seen = Hash.new(0)
+        @entries.each_with_object({}) do |entry, found|
+          path = entry.path.join('/')
+          kept = entry.attributes.except(*IDENTIFYING_ATTRIBUTES)
+          found[seen[path].zero? ? path : "#{path}##{seen[path]}"] = kept unless kept.empty?
+          seen[path] += 1
+        end
+      end
+
+      # What differs from another reading of the file, setting by setting.
+      def changes_since(earlier)
+        before = earlier.settings
+        after = settings
+        (before.keys | after.keys).filter_map do |path|
+          { setting: path, was: before[path], now: after[path] } unless before[path] == after[path]
+        end
+      end
 
       private
 

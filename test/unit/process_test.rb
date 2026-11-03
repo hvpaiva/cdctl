@@ -40,10 +40,11 @@ class ProcessDiscoveryTest < Minitest::Test
     assert_equal 77, game[:pid]
   end
 
-  def test_steam_starting_the_game_is_its_own_state
+  # The wrapper outlives the game by a few seconds, so its presence alone cannot say which way this is going.
+  def test_steam_wrapper_without_the_game_is_its_own_state
     @machine.add_process(9, comm: 'reaper', argv: ['/steam/reaper', 'SteamLaunch', "AppId=#{Machine::APP_ID}", '--'])
 
-    assert_equal 'starting', game[:state]
+    assert_equal 'starting_or_closing', game[:state]
   end
 
   def test_a_dead_process_is_not_running

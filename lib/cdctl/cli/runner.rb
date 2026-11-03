@@ -54,7 +54,7 @@ module Cdctl
         report(e)
         e.exit_status
       rescue SignalException => e
-        report(Cdctl::Error.new("stopped by #{e.signm}", code: 'INTERRUPTED'))
+        report(Cdctl::Error.interrupted(e))
         SIGNAL_STATUS
       rescue StandardError => e
         report_unexpected(e)

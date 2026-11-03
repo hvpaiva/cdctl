@@ -66,6 +66,12 @@ module Cdctl
 
     def compositor_probe(process) = -> { observe_compositor(process) }
 
+    # What the display was when cdctl itself started this process. Only that makes the image's size
+    # known when the option file stores none.
+    def note_launch(process, display)
+      Ledger.new(@runtime.paths.sessions_dir).note_launch(process.identity, display) if display.known?
+    end
+
     # Another connection to the same server, for a part that must keep working if this one fails.
     def connection_opener(process)
       display = @x11.fetch(:display)

@@ -1,12 +1,15 @@
 # frozen_string_literal: true
 
 require_relative 'base'
+require_relative 'sending'
 require_relative '../capabilities'
 require_relative '../observer'
 
 module Cdctl
   module Commands
     class Capabilities < Base
+      include Sending
+
       NAME = 'capabilities'
 
       def self.command(factory)
@@ -27,7 +30,9 @@ module Cdctl
       def perform(invocation, runtime, _args, _opts)
         Observer.open(runtime) do |observer|
           snapshot = observer.snapshot
-          report = Cdctl::Capabilities.new(snapshot:, connection: observer.connection, shell: runtime.shell)
+          profile, reason = profile_for(runtime, snapshot)
+          report = Cdctl::Capabilities.new(snapshot:, connection: observer.connection, shell: runtime.shell, profile:,
+                                           profile_reason: reason)
           invocation.success(data: report.to_h, target: snapshot.target)
         end
       end

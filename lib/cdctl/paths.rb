@@ -36,6 +36,8 @@ module Cdctl
 
     def input_dir = File.join(state_home, 'input')
 
+    def profiles_dir = File.join(data_base, APP, 'profiles')
+
     def runtime_dir
       value = present(@env['XDG_RUNTIME_DIR'])
       return value if value && File.absolute_path?(value)
@@ -57,6 +59,12 @@ module Cdctl
       return present(@env['LOCALAPPDATA']) || File.join(home, 'AppData', 'Local') if windows?
 
       xdg('XDG_STATE_HOME', File.join('.local', 'state'))
+    end
+
+    def data_base
+      return present(@env['LOCALAPPDATA']) || File.join(home, 'AppData', 'Local') if windows?
+
+      xdg('XDG_DATA_HOME', File.join('.local', 'share'))
     end
 
     def windows? = @platform == Platform::WINDOWS

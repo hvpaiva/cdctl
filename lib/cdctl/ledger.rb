@@ -11,7 +11,7 @@ module Cdctl
   class Ledger
     KEEP = 32
 
-    Record = Data.define(:first_seen_at, :window_size, :display_size, :fresh) do
+    Record = Data.define(:first_seen_at, :window_size, :display_size, :fresh, :launch_display) do
       def fresh? = fresh
 
       def first_seen = { at: first_seen_at, window: window_size, display: display_size }.compact
@@ -34,16 +34,36 @@ module Cdctl
       read(identity) || store(identity, window:, display:)
     end
 
+    # For a process cdctl itself started. It stands apart from the record, which only exists once
+    # the process has a window, and a launch can be recorded long before that.
+    def note_launch(identity, display)
+      return if launch_of(identity)
+
+      PrivateFiles.directory(@directory)
+      PrivateFiles.write(launch_path(identity), JSON.generate(display.value))
+    rescue SystemCallError
+      nil
+    end
+
     private
 
     def path(identity) = File.join(@directory, "#{identity}.json")
+
+    def launch_path(identity) = File.join(@directory, "#{identity}.launch.json")
 
     def read(identity)
       data = JSON.parse(File.read(path(identity)), symbolize_names: true)
       return nil unless data.is_a?(Hash) && data[:first_seen_at]
 
       Record.new(first_seen_at: data[:first_seen_at], window_size: data[:window], display_size: data[:display],
-                 fresh: false)
+                 fresh: false, launch_display: launch_of(identity))
+    rescue SystemCallError, JSON::ParserError
+      nil
+    end
+
+    def launch_of(identity)
+      data = JSON.parse(File.read(launch_path(identity)), symbolize_names: true)
+      data.is_a?(Hash) ? data : nil
     rescue SystemCallError, JSON::ParserError
       nil
     end
@@ -53,7 +73,8 @@ module Cdctl
       PrivateFiles.directory(@directory)
       PrivateFiles.write(path(identity), JSON.generate(first_seen_at: at, window:, display:))
       PrivateFiles.keep_newest(@directory, '*.json', KEEP)
-      Record.new(first_seen_at: at, window_size: window, display_size: display, fresh: true)
+      Record.new(first_seen_at: at, window_size: window, display_size: display, fresh: true,
+                 launch_display: launch_of(identity))
     rescue SystemCallError
       nil
     end

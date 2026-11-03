@@ -9,24 +9,23 @@ module Cdctl
   module Input
     # Sends one gesture at a time, in the only order that keeps the promise: check, write down what
     # is about to be held, arm the sentinel, press, watch, release, confirm. The release is in an
-    # ensure block, and a release that cannot be sent is handed to the sentinel.
+    # ensure block with signals held back, and a release that cannot be sent is left to the sentinel.
     class Sender
       # How often a hold looks at the focus and at other input.
       POLL = 0.02
       # A dialog takes a process start to check, so a hold looks for one less often.
       DIALOG_POLL = 0.25
-      RELEASE_TIMEOUT = 2.0
 
       attr_reader :actions
 
-      def initialize(connection:, guard:, activity:, journal:, sentinel:, journal_base:)
+      def initialize(connection:, guard:, activity:, journal:, sentinel:, journal_base:, actions: [])
         @connection = connection
         @guard = guard
         @activity = activity
         @journal = journal
         @sentinel = sentinel
         @journal_base = journal_base
-        @actions = []
+        @actions = actions
       end
 
       def press(item, hold:, description:)
@@ -39,14 +38,16 @@ module Cdctl
           send_item(item, down: true)
           hold_for(hold)
         ensure
-          released_by = release(item)
-          @actions << description.merge(timing(pressed_at), released_by:)
+          # A signal here would skip the release, so it waits until the key is up.
+          Thread.handle_interrupt(SignalException => :never) { finish_hold(item, description, pressed_at) }
         end
+        raise_trouble(@sentinel.trouble)
         confirm_released(item)
       end
 
       def move(x, y, description:)
         @guard.before_send!
+        nothing_else_held!
         @activity.check!
         @activity.sent
         @connection.fake_motion(x, y)
@@ -112,20 +113,24 @@ module Cdctl
         raise Error.new('the hold outlived its deadline, and the sentinel released it', code: 'TIMEOUT')
       end
 
-      def timing(pressed_at)
+      def finish_hold(item, description, pressed_at)
+        released_by = release(item)
+      ensure
         released_at = Time.now
-        { held_ms: ((released_at - pressed_at) * 1000).round, pressed_at: pressed_at.iso8601(3),
-          released_at: released_at.iso8601(3) }
+        @actions << description.merge(held_ms: ((released_at - pressed_at) * 1000).round,
+                                      pressed_at: pressed_at.iso8601(3), released_at: released_at.iso8601(3),
+                                      released_by: released_by || 'sentinel')
       end
 
       # Never raises: this runs in an ensure block, on the way out of whatever went wrong. A sentinel
       # that is gone has nothing left to do once the release is sent. If that release cannot be sent
       # either, the journal stays, and the next command finishes the job.
       def release(item)
+        expired = @sentinel.expired?
         send_item(item, down: false)
         @journal.clear
         disarm_sentinel
-        'cdctl'
+        expired || @sentinel.expired? ? 'sentinel' : 'cdctl'
       rescue X11::Error, SystemCallError
         @sentinel.abandon
         @journal.read ? 'next_command' : 'sentinel'

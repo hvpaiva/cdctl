@@ -339,6 +339,49 @@ class RealInputTest < Minitest::Test
     assert_empty @x.keys_held
   end
 
+  # A second signal can land during the cleanup of the first, at any moment. Whichever moment it
+  # is, nothing stays down and nothing is left waiting.
+  def test_signals_in_a_row_leave_nothing_down
+    6.times do |round|
+      pid, reader = hold_in_background
+      Process.kill('TERM', pid)
+      sleep(round * 0.0005)
+      begin
+        Process.kill('INT', pid)
+      rescue Errno::ESRCH
+        nil
+      end
+      # A signal landing after the cleanup can end the process before it answers, which is fine here:
+      # what matters is what it left on the server.
+      Process.wait(pid)
+      @children.delete(pid)
+      reader.close
+
+      wait_until("a key stayed down in round #{round}") { @x.keys_held.empty? }
+      wait_until("the journal stayed in round #{round}") { @journal.read.nil? }
+    end
+  end
+
+  def test_many_short_presses_interrupted_leave_nothing_down
+    reader, writer = IO.pipe
+    pid = fork do
+      reader.close
+      writer.write(JSON.generate(input('key', 'a', '--hold-ms', '2', '--repeat', '20', '--gap-ms', '1')[1]))
+      writer.close
+      exit!(0)
+    end
+    writer.close
+    @children << pid
+    sleep(0.05)
+    Process.kill('TERM', pid)
+    Process.wait(pid)
+    @children.delete(pid)
+    reader.close
+
+    wait_until('a key stayed down') { @x.keys_held.empty? }
+    wait_until('the journal stayed') { @journal.read.nil? }
+  end
+
   def test_losing_the_real_focus_during_a_hold_releases
     pid, reader = hold_in_background
     other = @maker.create(width: 10, height: 10, color: 0)

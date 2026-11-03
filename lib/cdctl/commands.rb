@@ -5,13 +5,16 @@ require_relative 'error_codes'
 require_relative 'version'
 require_relative 'commands/capabilities'
 require_relative 'commands/doctor'
+require_relative 'commands/game'
 require_relative 'commands/input'
 require_relative 'commands/lease'
+require_relative 'commands/menu'
 require_relative 'commands/observation'
 require_relative 'commands/observe'
 require_relative 'commands/planned'
 require_relative 'commands/schema'
 require_relative 'commands/screenshot'
+require_relative 'commands/settings'
 require_relative 'commands/status'
 
 module Cdctl
@@ -27,8 +30,8 @@ module Cdctl
                        'guarded.'.freeze
 
     # Help lists the commands in this order within their sections.
-    COMMANDS = [Capabilities, Doctor, Schema, Status, Observe, Screenshot, Observation, LeaseCommands,
-                InputCommands].freeze
+    COMMANDS = [Capabilities, Doctor, Schema, Status, Observe, Screenshot, Observation, LeaseCommands, InputCommands,
+                MenuCommands, GameCommands, SettingsCommands].freeze
 
     def self.registry(factory)
       CLI::Registry.new(

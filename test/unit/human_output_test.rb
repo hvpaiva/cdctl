@@ -127,7 +127,7 @@ class HumanOutputTest < Minitest::Test
     _, out, = @machine.run('capabilities')
 
     assert_match(/linux, compositor unknown, not tested with the game/, out)
-    assert_match(/game\.launch\s+not_implemented/, out)
+    assert_match(/diagnostics\.performance\s+not_implemented/, out)
     assert_match(/hud\.radar\s+mod_dependent/, out)
     assert_match(/no game window to try|no DISPLAY/, out)
   end
@@ -138,7 +138,7 @@ class HumanOutputTest < Minitest::Test
 
     assert_equal 'cdctl doctor result', JSON.parse(one)['title']
     assert_match(/Available\s+capabilities/, list)
-    assert_match(/Planned\s+game\.continue/, list)
+    assert_match(/Planned\s+hud\.radar/, list)
   end
 
   def test_doctor_prints_each_check_when_healthy

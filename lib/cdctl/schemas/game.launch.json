@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["started"],
+  "properties": {
+    "started": { "type": "boolean", "description": "False means the game was already running and nothing was started." },
+    "window": { "type": "string" },
+    "launch_display_mode": { "$ref": "#/$defs/fact" }
+  }
+}
