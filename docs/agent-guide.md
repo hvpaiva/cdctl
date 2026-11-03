@@ -113,14 +113,21 @@ cdctl game quit --graceful --token TOKEN --json       # through the menu; never 
 
 - `before` and `after` are the screens, `changed` says whether anything was sent, and `verification.method` says how it was
   checked: `visual_anchors`, `option_file` or `process`.
-- A menu already open answers `changed: false` and sends nothing, so asking twice is safe.
+- A menu already open answers `changed: false` and sends nothing, so asking again after a success is safe. After a
+  `VERIFY_FAILED` it is not, since the input may still be on its way, and for 30 seconds, while the screen has not moved,
+  the next command refuses with `details.retry_after_seconds`.
 - `settings set` answers with `data.real_changes`, what really differs in the file, and `next_steps` holds the command that
-  undoes it. Anything other than the planned change answers `VERIFY_FAILED`. Without `--apply` it sends nothing.
+  undoes it. Anything other than the planned change answers `VERIFY_FAILED`. Without `--apply` it sends nothing. On a failure
+  partway, `data.row_left_pending` says the row may show a value never applied, and `data.confirmation_sent` says the change
+  may or may not have taken, so read it with `settings get`.
+- `status` answers `data.game.state: starting_or_closing` while Steam's wrapper is alive with no game, since a game on its
+  way up and one that has just closed look the same. `game launch` then waits, and starts the game if the wrapper goes with
+  nothing in its place. `game quit` refuses until it is clear which one it was.
 - Starting a new game, picking a save and leaving by force are not offered at all.
 
 | Code | Meaning | What to do |
 | --- | --- | --- |
-| `UNKNOWN_SCREEN` | The screen is not one this profile knows. Nothing was sent | Observe and read the image. It may be loading |
+| `UNKNOWN_SCREEN` | The screen, or the entry a step needs on it, is not one this profile knows. Nothing more was sent, and `actions` lists what had been | Observe and read the image. It may be loading |
 | `VERIFY_FAILED` | Something was sent once and the expected result did not come | Observe first. Do not repeat it blind: the game may only be slow, and a second key can undo the first |
 | `PRECONDITION_FAILED` | There is no known way from here, as the game menu from the title screen | Follow `next_steps` |
 | `UNSUPPORTED_BUILD` | No profile covers this game, or this keyboard preset | Use `cdctl input` and read the captures |
@@ -159,6 +166,7 @@ Every answer below means the input did not happen, or stopped, with everything r
 | `RESOLUTION_CHANGED`, `TARGET_CHANGED` | The window or the process is not the one you saw | Observe again |
 | `OBSERVATION_STALE` | The observation is older than `--max-age`, 120 seconds by default | Observe again |
 | `LEASE_LOST` | Someone took the lease over | Stop what you were doing |
+| `INPUT_FAILED`, `TIMEOUT` | The X server stopped answering or refused, and `actions` says what went out before that | Run `status`, and `input release` if it says `left_held` |
 
 `actions` lists what really happened, also on failure, with how long each key was held and what released it.
 `released_by` is `cdctl`, `sentinel`, or `next_command` when the next input command will finish the job. `status` reports

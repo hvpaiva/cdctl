@@ -16,8 +16,8 @@ Report a vulnerability through a private security advisory on this repository.
 | `$XDG_DATA_HOME/cdctl/profiles` | Read, if a machine has profiles of its own |
 | `$XDG_STATE_HOME/cdctl` | Write, with files readable by their owner alone |
 
-A lease token appears once, in the answer to `lease acquire`, and only its hash is stored. The lease stops programs that
-ask for it. Anything running as the same user could read or replace its file, so it is coordination and not a security
+A lease token appears once, in the answer to `lease acquire`, and only its hash is stored. Nothing cdctl starts inherits
+it, so it does not reach Steam or the game. The lease stops programs that ask for it. Anything running as the same user could read or replace its file, so it is coordination and not a security
 boundary.
 
 Captures can show what is on the player's screen, which is why they are private files, and why a capture reads the game
