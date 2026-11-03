@@ -10,19 +10,25 @@ module Cdctl
     # the strerror text alone.
     SYSTEM_SUFFIX = / @ \S+ - .*\z/m
 
-    attr_reader :code, :next_steps, :data, :target, :details
+    attr_reader :code, :next_steps, :data, :target, :details, :actions, :changed, :artifacts, :not_verified
 
     def self.from_system_call(error, path, code: 'PRECONDITION_FAILED')
       new("#{path}: #{error.message.sub(SYSTEM_SUFFIX, '')}", code:)
     end
 
-    def initialize(message = nil, code: 'INTERNAL_ERROR', next_steps: [], data: nil, target: nil, details: nil)
+    # `actions` and `changed` report what already happened: a failure after a key press still pressed it.
+    def initialize(message = nil, code: 'INTERNAL_ERROR', next_steps: [], data: nil, target: nil, details: nil,
+                   actions: [], changed: false, artifacts: [], not_verified: [])
       super(message)
       @code = code
       @next_steps = next_steps
       @data = data
       @target = target
       @details = details
+      @actions = actions
+      @changed = changed
+      @artifacts = artifacts
+      @not_verified = not_verified
     end
 
     def category = ErrorCodes.category(code)

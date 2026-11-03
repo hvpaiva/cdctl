@@ -17,3 +17,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cdctl schema` prints the JSON Schema of each result.
 - `cdctl observe` and `cdctl screenshot` stop with `SYSTEM_DIALOG_PRESENT` when a surface that can be an authentication prompt is over the game, or the session is locked.
 - Every command answers with versioned JSON under `--json`, help and the version included, and with documented exit statuses.
+- `cdctl lease` coordinates exclusive ownership of input between programs. A lease never expires by itself: a suspected orphan is reported, and ending it takes an explicit, logged takeover that fences the old token.
+- `cdctl status` reports who holds the input lease.

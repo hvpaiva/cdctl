@@ -59,6 +59,13 @@ module Cdctl
 
       def state_line(value) = [value[:state].tr('_', ' '), value[:reason]].compact.join(': ')
 
+      def lease(value)
+        return state_line(value) unless value[:state] == 'held'
+
+        orphan = value[:orphan][:suspected] ? ", suspected orphan (#{value[:orphan][:reasons].join(', ')})" : ''
+        "held by #{value[:owner]}: #{value[:purpose]}#{orphan}"
+      end
+
       def compositor(value)
         return "none known: #{value[:reason]}" unless value[:status] == 'available'
 

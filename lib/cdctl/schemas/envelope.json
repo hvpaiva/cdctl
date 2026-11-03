@@ -16,12 +16,28 @@
     "started_at": { "type": "string" },
     "duration_ms": { "type": "integer", "minimum": 0 },
     "changed": {
-      "type": "boolean",
-      "description": "Whether the command changed anything in the game or the machine."
+      "type": ["boolean", "null"],
+      "description": "Whether the command changed anything in the game or the machine. Null means it acted and cdctl cannot say what that did: read verification."
     },
     "actions": {
       "type": "array",
-      "description": "What the command really did to the game, in order. Empty for observation commands."
+      "description": "What the command really did, in order, including on failure. Empty for observation commands."
+    },
+    "before": { "description": "The state the command found, for commands that act." },
+    "after": { "description": "The state the command left, for commands that act." },
+    "verification": {
+      "type": "object",
+      "description": "How the result of an action was checked.",
+      "required": ["method"],
+      "properties": {
+        "method": {
+          "enum": ["visual_anchors", "option_file", "process", "caller_required"],
+          "description": "caller_required: cdctl did not check, so read the capture."
+        },
+        "screenshot": { "type": "string" },
+        "expected": {},
+        "observed": {}
+      }
     },
     "target": {
       "description": "The process and window this result is about, and when they were observed.",
@@ -87,6 +103,38 @@
         "pixel_scale": { "type": "number" },
         "blank_suspected": { "type": "boolean" },
         "fallback_reason": { "type": "string" }
+      }
+    },
+    "lease": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["free", "held", "unknown"] },
+        "reason": { "type": "string" },
+        "generation": { "type": "integer" },
+        "owner": { "type": "string" },
+        "purpose": { "type": "string" },
+        "host": { "type": "string" },
+        "holder": { "type": "object" },
+        "acquired_at": { "type": "string" },
+        "renewed_at": { "type": "string" },
+        "heartbeat_age_seconds": { "type": "number" },
+        "taken_from": { "type": "string" },
+        "last_request_id": { "type": "string" },
+        "last_owner": { "type": "string" },
+        "released_at": { "type": "string" },
+        "released_by": { "type": "string" },
+        "orphan": {
+          "type": "object",
+          "description": "A suspicion to weigh. The lease stays held until someone takes it over.",
+          "properties": {
+            "suspected": { "type": "boolean" },
+            "reasons": {
+              "type": "array",
+              "items": { "enum": ["machine_restarted", "holder_process_gone", "owner_silent"] }
+            }
+          }
+        }
       }
     },
     "snapshot": {

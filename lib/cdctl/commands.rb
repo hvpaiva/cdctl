@@ -5,6 +5,7 @@ require_relative 'error_codes'
 require_relative 'version'
 require_relative 'commands/capabilities'
 require_relative 'commands/doctor'
+require_relative 'commands/lease'
 require_relative 'commands/observation'
 require_relative 'commands/observe'
 require_relative 'commands/planned'
@@ -24,7 +25,7 @@ module Cdctl
                        'assumed. This version only observes: it sends nothing to the game.'.freeze
 
     # Help lists the commands in this order within their sections.
-    COMMANDS = [Capabilities, Doctor, Schema, Status, Observe, Screenshot, Observation].freeze
+    COMMANDS = [Capabilities, Doctor, Schema, Status, Observe, Screenshot, Observation, LeaseCommands].freeze
 
     def self.registry(factory)
       CLI::Registry.new(
@@ -47,6 +48,7 @@ module Cdctl
         entries: [['CDCTL_STEAM_ROOT', 'Use this Steam directory instead of searching.'],
                   ['CDCTL_STATE_HOME', 'Where captures and observations are stored.'],
                   ['CDCTL_CONFIG', 'The configuration file.'],
+                  [Lease::TOKEN_VARIABLE, 'The lease token, kept off the command line.'],
                   ['CDCTL_COLOR', 'When to use color: auto, always or never.']]
       )
     end

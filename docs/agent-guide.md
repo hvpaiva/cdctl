@@ -124,3 +124,27 @@ you need to see the game.
 
 The person who owns the machine may be playing, locally or through a stream. Do not close or restart the game,
 change the monitor, or stop anything else on the machine as part of observing it.
+
+Reading needs nothing. Acting needs the input lease, which another agent on the machine may hold:
+
+```sh
+cdctl lease status --json
+cdctl lease acquire --owner agent-a --purpose "check a preset" --json   # data.token, shown only here
+cdctl lease renew --token TOKEN --json                                  # between long steps
+cdctl lease release --token TOKEN --json                                # always, when done
+```
+
+| Answer | Meaning | What to do |
+| --- | --- | --- |
+| `LEASE_BUSY` | Someone else holds it. `data` says who and why | Wait, or ask them |
+| `LEASE_LOST` | Your token no longer holds it: it was released or taken over | Stop what you were doing. Read `lease status` first |
+| `LEASE_REQUIRED` | Input was tried with no token | Acquire it first |
+
+- A lease never ends because time passed. `orphan.suspected` with its `reasons` (`machine_restarted`,
+  `holder_process_gone`, `owner_silent`) is a suspicion for you to weigh, and nothing happens on its own.
+- `--holder-pid` names a long-lived process of yours, so others can see when it ends. The shell that runs one
+  command is not long-lived.
+- `--takeover --reason TEXT` ends a suspected orphan, and needs `--force` when nothing suggests the owner is gone.
+  Do that only with the person's say-so. It is logged, and the old token stops working at once.
+- Pass the token as `CDCTL_LEASE_TOKEN` to keep it off the command line, and never print it in your own logs.
+- A lease coordinates programs. It does not stop the person at the keyboard.
