@@ -6,11 +6,13 @@ module Cdctl
     Screen = Data.define(:root, :width, :height, :root_visual, :root_depth, :visuals)
 
     # The server's description of itself, sent once when a client connects.
-    Setup = Data.define(:resource_base, :resource_mask, :image_byte_order, :pixmap_formats, :screens) do
+    Setup = Data.define(:resource_base, :resource_mask, :image_byte_order, :min_keycode, :max_keycode, :pixmap_formats,
+                        :screens) do
       def self.parse(body)
         resource_base, resource_mask = body[4, 8].unpack('VV')
         vendor_length = body[16, 2].unpack1('v')
         screen_count, format_count, image_byte_order = body[20, 3].unpack('CCC')
+        min_keycode, max_keycode = body[26, 2].unpack('CC')
         offset = 32 + ((vendor_length + 3) & ~3)
         pixmap_formats = (0...format_count).to_h do |index|
           depth, bits_per_pixel = body[offset + (index * 8), 2].unpack('CC')
@@ -21,7 +23,7 @@ module Cdctl
           screen, offset = read_screen(body, offset)
           screen
         end
-        new(resource_base:, resource_mask:, image_byte_order:, pixmap_formats:, screens:)
+        new(resource_base:, resource_mask:, image_byte_order:, min_keycode:, max_keycode:, pixmap_formats:, screens:)
       end
 
       def self.read_screen(body, offset)

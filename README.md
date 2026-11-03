@@ -10,8 +10,9 @@ machine that runs the game, needs no hook, driver or service, and depends on not
 It replaces fragile sequences of clicks and key presses with operations that state what they found,
 what they did and how they checked it. It is not a combat bot, a save editor or a system manager.
 
-**Status: this version only observes. It sends nothing to the game.** Input, menus and settings are
-listed as `not_implemented` by `cdctl capabilities` until they exist.
+**Status: observing and guarded low-level input work.** Menus and settings are listed as
+`not_implemented` by `cdctl capabilities` until they exist. Nothing is sent to the game unless a
+command asks for it and holds the input lease.
 
 ## Install
 
@@ -68,8 +69,35 @@ New to it as an agent? Read [the agent guide](docs/agent-guide.md).
 | `cdctl screenshot` | Captures the game window to a PNG, with a region and a zoom that repeats pixels |
 | `cdctl observation check ID` | Says whether a stored observation still describes the game |
 | `cdctl lease status\|acquire\|renew\|release` | Coordinates exclusive ownership of input between programs |
+| `cdctl input key\|click\|move\|scroll` | Sends guarded input to the focused game, with a release that survives `kill -9` |
+| `cdctl input release` | Releases what a killed cdctl left held |
 
 `cdctl COMMAND --help` documents each one.
+
+## Sending input
+
+Input goes through XTEST to the X server the game uses, so no driver is needed and no desktop shortcut can fire. A
+person's keyboard keeps working, and cdctl stops when it sees one.
+
+```sh
+cdctl lease acquire --owner agent-a --purpose "open the settings" --json   # data.token
+cdctl input key o --token TOKEN --json                                     # artifacts[0] shows the result
+cdctl lease release --token TOKEN --json
+```
+
+Before every send it checks the lease, the process, the geometry, the focus, system dialogs and that nothing else is
+holding a key, and it refuses with a stable code when any of them fails. During a hold it keeps checking: another
+input device, another program using XTEST, a lost focus or a dialog releases at once.
+
+A key sent proves nothing about what it did, so the answer has `changed: null`, a capture and `input.result` under
+`not_verified`. A coordinate must come from an observation that still describes the game, and a point outside the
+window is refused.
+
+| What happens to cdctl during a hold | What releases the key |
+| --- | --- |
+| An error, a timeout or a signal | cdctl itself |
+| `kill -9` | A second process that watches it, in a session of its own |
+| `kill -9` on both | The next `cdctl input` command, from a journal written before the press. `cdctl status` reports it |
 
 ## The result contract
 
@@ -151,7 +179,7 @@ depends on one desktop. What a machine lacks is reported as unknown or unsupport
 | Setup | State |
 | --- | --- |
 | Linux, Proton, Hyprland | Tested with the game |
-| Linux, Proton, another Xwayland desktop (GNOME, KDE, Sway) or an X session | Same path, not yet tested with the game; system dialogs cannot be seen |
+| Linux, Proton, another Xwayland desktop (GNOME, KDE, Sway) or an X session | Same path, not yet tested with the game; system dialogs cannot be seen, so input needs `--allow-unverified-dialogs` |
 | Linux, Proton with gamescope | Observed as nested, not yet tested with the game |
 | Linux, native Wayland Proton | The game has no X window, so observation answers `WINDOW_NOT_FOUND` |
 | Windows, macOS | Discovery only; observation answers `UNSUPPORTED_PLATFORM` |
@@ -177,12 +205,13 @@ as globs) and `evidence_keep` (how many captures to keep, 100 by default).
 ## What it reads and writes
 
 It reads Steam's library and manifest files, `/proc`, the game's X server, the compositor's status and
-the game's option file. It never writes to the game, its saves or its settings.
+the game's option file. It never writes to the game's files, its saves or its settings. It sends input
+only when an `input` command asks for it.
 
 It writes only under `$XDG_STATE_HOME/cdctl`, with files readable by their owner alone: captures, which
-can show what is on your screen, small records of observations, and the input lease with its history.
-Old captures and observations are pruned. It reads a fixed list of variables from the game's environment
-and prints none but `DISPLAY`.
+can show what is on your screen, small records of observations, the input lease with its history, and
+a record of what is held during a key press. Old captures and observations are pruned. It reads a fixed
+list of variables from the game's environment and prints none but `DISPLAY`.
 
 ## Remove it
 

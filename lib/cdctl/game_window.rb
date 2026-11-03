@@ -27,6 +27,23 @@ module Cdctl
     MAX_FOCUS_WALK = 32
     MAX_CHILDREN = 8
 
+    # The focus can belong to any program and be gone by the time its parents are asked for, which
+    # proves only that this window does not have it.
+    def self.focus_within?(connection, id)
+      current = connection.input_focus
+      return false if [X11::Requests::NO_FOCUS, X11::Requests::POINTER_ROOT_FOCUS].include?(current)
+
+      MAX_FOCUS_WALK.times do
+        return true if current == id
+        return false if current == connection.screen.root || current.zero?
+
+        current = connection.tree(current).parent
+      end
+      false
+    rescue X11::RequestError
+      false
+    end
+
     def initialize(connection, app_id:, window_class:, pid: nil)
       @connection = connection
       @app_id = app_id
@@ -109,21 +126,6 @@ module Cdctl
       nil
     end
 
-    # The focus can belong to any program and be gone by the time its parents are asked for, which
-    # proves only that this window does not have it.
-    def focused?(id)
-      current = @connection.input_focus
-      return false if [X11::Requests::NO_FOCUS, X11::Requests::POINTER_ROOT_FOCUS].include?(current)
-
-      MAX_FOCUS_WALK.times do
-        return true if current == id
-        return false if current == root || current.zero?
-
-        current = @connection.tree(current).parent
-      end
-      false
-    rescue X11::RequestError
-      false
-    end
+    def focused?(id) = self.class.focus_within?(@connection, id)
   end
 end

@@ -127,7 +127,7 @@ class HumanOutputTest < Minitest::Test
     _, out, = @machine.run('capabilities')
 
     assert_match(/linux, compositor unknown, not tested with the game/, out)
-    assert_match(/input\.key\s+not_implemented/, out)
+    assert_match(/game\.launch\s+not_implemented/, out)
     assert_match(/hud\.radar\s+mod_dependent/, out)
     assert_match(/no game window to try|no DISPLAY/, out)
   end

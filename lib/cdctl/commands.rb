@@ -5,6 +5,7 @@ require_relative 'error_codes'
 require_relative 'version'
 require_relative 'commands/capabilities'
 require_relative 'commands/doctor'
+require_relative 'commands/input'
 require_relative 'commands/lease'
 require_relative 'commands/observation'
 require_relative 'commands/observe'
@@ -22,10 +23,12 @@ module Cdctl
                        'can prove, including what it could not verify. Every command answers with versioned JSON ' \
                        "under --json; start with cdctl capabilities --json.\n\n" \
                        'It works on any machine that runs the game. What a machine lacks is reported, never ' \
-                       'assumed. This version only observes: it sends nothing to the game.'.freeze
+                       'assumed. Reading needs nothing; sending input needs the lease, and every send is ' \
+                       'guarded.'.freeze
 
     # Help lists the commands in this order within their sections.
-    COMMANDS = [Capabilities, Doctor, Schema, Status, Observe, Screenshot, Observation, LeaseCommands].freeze
+    COMMANDS = [Capabilities, Doctor, Schema, Status, Observe, Screenshot, Observation, LeaseCommands,
+                InputCommands].freeze
 
     def self.registry(factory)
       CLI::Registry.new(

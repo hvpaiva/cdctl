@@ -60,8 +60,17 @@ module Cdctl
     end
 
     def screen_guard(process)
-      Capture::ScreenGuard.new(observe: -> { observe_compositor(process) }, pid: process.pid,
+      Capture::ScreenGuard.new(observe: compositor_probe(process), pid: process.pid,
                                ignored: @runtime.settings.ignored_overlay_layers)
+    end
+
+    def compositor_probe(process) = -> { observe_compositor(process) }
+
+    # Another connection to the same server, for a part that must keep working if this one fails.
+    def connection_opener(process)
+      display = @x11.fetch(:display)
+      credentials = cookies(display, process)
+      -> { @runtime.x11_opener.call(display, cookies: credentials) }
     end
 
     private

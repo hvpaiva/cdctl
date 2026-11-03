@@ -105,6 +105,23 @@
         "fallback_reason": { "type": "string" }
       }
     },
+    "input_activity": {
+      "type": "object",
+      "required": ["watched"],
+      "description": "How many events other sources produced during the command, per kind. Which key is never read.",
+      "properties": {
+        "watched": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "other_sources": {
+          "type": "object",
+          "properties": {
+            "key_press": { "type": "integer" },
+            "button_press": { "type": "integer" },
+            "motion": { "type": "integer" }
+          }
+        }
+      }
+    },
     "lease": {
       "type": "object",
       "required": ["state"],

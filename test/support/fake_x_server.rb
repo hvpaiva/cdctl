@@ -24,13 +24,27 @@ class FakeXServer
   INTERN_ATOM = 16
   INTERN_ONLY_IF_EXISTS = 1
   GET_IMAGE = 73
+  XINPUT_OPCODE = 131
+  XTEST_OPCODE = 132
+  XTEST_KEYBOARD = 5
+  XTEST_POINTER = 4
+  REAL_KEYBOARD = 9
+  REAL_POINTER = 6
+  DEVICES = { 2 => 'Virtual core pointer', 3 => 'Virtual core keyboard', XTEST_POINTER => 'Virtual core XTEST pointer',
+              XTEST_KEYBOARD => 'Virtual core XTEST keyboard', REAL_POINTER => 'real-pointer',
+              REAL_KEYBOARD => 'real-keyboard' }.freeze
+  RAW_TYPES = { key_press: 13, key_release: 14, button_press: 15, button_release: 16, motion: 17 }.freeze
+  # What the fake keyboard offers, in keycode order from 8, each with an unused second column.
+  KEYSYMS = [0xFF1B, 0xFF0D, 0x20, *('a'..'z').map(&:ord), *('0'..'9').map(&:ord), 0xFFBE].freeze
+  FIRST_KEYCODE = 8
 
   Window = Struct.new(:id, :parent, :x, :y, :width, :height, :depth, :visual, :map_state, :properties, :children,
                       :pixel, keyword_init: true)
 
-  attr_reader :directory, :windows, :extensions, :requests
+  attr_reader :directory, :windows, :extensions, :requests, :keys_down, :buttons_down, :fake_inputs
   attr_accessor :focus, :required_cookie, :silent, :outputs, :after_image, :refuse_images, :truncate_next_reply,
-                :late_error, :silent_after, :hang_up_after, :client_timeout
+                :late_error, :silent_after, :hang_up_after, :client_timeout, :xi2_version, :pointer, :on_fake_input,
+                :refuse_fake_input
 
   def initialize(display: 7, width: 1920, height: 1080)
     @display = display
@@ -42,15 +56,32 @@ class FakeXServer
     @atoms = {}
     @next_atom = 300
     @focus = 1
-    @extensions = { 'RANDR' => RANDR_OPCODE, 'XTEST' => 132, 'XInputExtension' => 131 }
+    @extensions = { 'RANDR' => RANDR_OPCODE, 'XTEST' => XTEST_OPCODE, 'XInputExtension' => XINPUT_OPCODE }
     @selection_owners = {}
     @requests = []
     @outputs = [{ name: 'OUT-1', x: 0, y: 0, width:, height:, dot_clock: 148_500_000, h_total: 2200, v_total: 1125 }]
     @windows = { ROOT => Window.new(id: ROOT, parent: 0, x: 0, y: 0, width:, height:, depth: 24, visual: ROOT_VISUAL,
                                     map_state: 2, properties: {}, children: [], pixel: 0) }
+    @keys_down = []
+    @buttons_down = []
+    @pointer = [0, 0]
+    @fake_inputs = []
+    @xi2_version = [2, 3]
+    @subscribers = []
+    @connections = []
     @thread = Thread.new { serve }
     @thread.report_on_exception = false
   end
+
+  # A keycode the fake keyboard has for this keysym, as a real server's mapping would say.
+  def self.keycode(keysym) = FIRST_KEYCODE + KEYSYMS.index(keysym)
+
+  # What a person pressing something looks like from here: an event from a real device.
+  def input_from_a_person(kind = :key_press, device: kind == :motion ? REAL_POINTER : REAL_KEYBOARD)
+    deliver(kind, device)
+  end
+
+  def fake_input_kinds = fake_inputs.map(&:first)
 
   def display = ":#{@display}"
 
@@ -62,7 +93,7 @@ class FakeXServer
   end
 
   def stop
-    @thread.kill
+    [@thread, *@connections].each(&:kill)
     @server.close
     FileUtils.remove_entry(@directory)
   end
@@ -104,8 +135,12 @@ class FakeXServer
     end
   end
 
+  # One thread per client: input keeps several connections open at once.
   def serve
-    loop { handle(@server.accept) }
+    loop do
+      client = @server.accept
+      @connections << Thread.new(client) { handle(it) }.tap { it.report_on_exception = false }
+    end
   rescue IOError, SystemCallError
     nil
   end
@@ -128,8 +163,10 @@ class FakeXServer
 
       respond(socket, opcode, data, body, sequence)
     end
+    @subscribers.delete(socket)
     socket.close
   rescue IOError, SystemCallError
+    @subscribers.delete(socket)
     nil
   end
 
@@ -152,7 +189,9 @@ class FakeXServer
       socket.write(error(sequence - 1, late_error, 99))
       self.late_error = nil
     end
-    answer = answer(opcode, data, body, sequence)
+    answer = answer(opcode, data, body, sequence, socket)
+    return unless answer
+
     if truncate_next_reply
       socket.write(answer[0, truncate_next_reply])
       self.truncate_next_reply = nil
@@ -188,7 +227,7 @@ class FakeXServer
     [1, 0, 11, 0, body.bytesize / 4].pack('CCvvv') + body
   end
 
-  def answer(opcode, data, body, sequence)
+  def answer(opcode, data, body, sequence, socket)
     case opcode
     when 3 then with_window(body, opcode, sequence) { attributes_reply(it, sequence) }
     when 14 then with_window(body, opcode, sequence) { geometry_reply(it, sequence) }
@@ -197,12 +236,97 @@ class FakeXServer
     when 17 then atom_name_reply(body, sequence)
     when 20 then with_window(body, opcode, sequence) { property_reply(it, body, sequence) }
     when 23 then selection_owner_reply(body, sequence)
+    when 38 then pointer_reply(sequence)
     when 40 then with_window(body, opcode, sequence) { translate_reply(it, sequence) }
     when 43 then reply(sequence, 1, [@focus].pack('V'))
+    when 44 then keymap_reply(sequence)
     when GET_IMAGE then image_reply(body, opcode, sequence)
     when 98 then extension_reply(body, sequence)
+    when 101 then keyboard_mapping_reply(body, sequence)
     when RANDR_OPCODE then randr_reply(data, body, sequence)
+    when XTEST_OPCODE then xtest_answer(data, body, sequence)
+    when XINPUT_OPCODE then xinput_answer(data, sequence, socket)
     else error(sequence, 1, opcode)
+    end
+  end
+
+  def pointer_reply(sequence)
+    mask = @buttons_down.sum { 1 << (8 + it - 1) }
+    reply(sequence, 1, [ROOT, 0, *@pointer, *@pointer, mask].pack('VVs<s<s<s<v'))
+  end
+
+  def keymap_reply(sequence)
+    bytes = Array.new(32, 0)
+    @keys_down.each { bytes[it / 8] |= 1 << (it % 8) }
+    [1, 0, sequence, 2].pack('CCvV') + bytes.pack('C*')
+  end
+
+  def keyboard_mapping_reply(body, sequence)
+    first, count = body.unpack('CC')
+    syms = (0...count).flat_map { [KEYSYMS.fetch(first + it - FIRST_KEYCODE, 0), 0] }
+    reply(sequence, 2, '', syms.pack('V*'))
+  end
+
+  def xtest_answer(minor, body, sequence)
+    return reply(sequence, 2, [2].pack('v')) if minor.zero?
+    return error(sequence, 1, XTEST_OPCODE) unless minor == 2
+    return error(sequence, 2, XTEST_OPCODE) if refuse_fake_input
+
+    type, detail = body.unpack('CC')
+    apply_fake_input(type, detail, *body[20, 4].unpack('s<s<'))
+    nil
+  end
+
+  def apply_fake_input(type, detail, x, y)
+    case type
+    when 2 then press(@keys_down, detail, :key_press, XTEST_KEYBOARD)
+    when 3 then release(@keys_down, detail, :key_release, XTEST_KEYBOARD)
+    when 4 then press(@buttons_down, detail, :button_press, XTEST_POINTER)
+    when 5 then release(@buttons_down, detail, :button_release, XTEST_POINTER)
+    when 6
+      @pointer = [x, y]
+      deliver(:motion, XTEST_POINTER)
+    end
+    @fake_inputs << [type, detail, x, y]
+    on_fake_input&.call(type, detail)
+  end
+
+  def press(down, detail, kind, device)
+    down << detail unless down.include?(detail)
+    deliver(kind, device)
+  end
+
+  def release(down, detail, kind, device)
+    down.delete(detail)
+    deliver(kind, device)
+  end
+
+  def xinput_answer(minor, sequence, socket)
+    case minor
+    when 47 then reply(sequence, 0, xi2_version.pack('vv'))
+    when 48 then xi_devices_reply(sequence)
+    when 46
+      @subscribers << socket
+      nil
+    else error(sequence, 1, XINPUT_OPCODE)
+    end
+  end
+
+  def xi_devices_reply(sequence)
+    empty_class = [0, 2, 0, 0].pack('vvvv')
+    entries = DEVICES.map do |id, name|
+      use = name.include?('pointer') ? 3 : 4
+      [id, use, 2, 1, name.bytesize, 1, 0].pack('vvvvvCC') + pad(name) + empty_class
+    end
+    reply(sequence, 0, [DEVICES.size].pack('v'), entries.join)
+  end
+
+  def deliver(kind, device)
+    event = [35, XINPUT_OPCODE, 0, 0, RAW_TYPES.fetch(kind), 3, 0, 0, device, 0, 0, 0].pack('CCvVvvVVvvVV')
+    @subscribers.each do |socket|
+      socket.write(event)
+    rescue IOError, SystemCallError
+      nil
     end
   end
 

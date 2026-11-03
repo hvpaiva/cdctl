@@ -13,8 +13,8 @@ cdctl observe --json                       # the same, plus a capture and an obs
 cdctl observation check OBS_ID --json      # is that observation still true?
 ```
 
-This version only observes. `input`, `menu`, `settings`, `game` and `lease` answer `NOT_IMPLEMENTED` with
-exit status 4. Check `cdctl capabilities` rather than assuming a command exists.
+`menu`, `settings` and `game` answer `NOT_IMPLEMENTED` with exit status 4 for now. Check `cdctl capabilities` rather
+than assuming a command exists.
 
 ## Reading a result
 
@@ -91,6 +91,47 @@ ratios.
 On `present`, `observe` and `screenshot` answer `SYSTEM_DIALOG_PRESENT` and take no capture, while `status` still
 reports it. Never answer, dismiss or work around a dialog. cdctl never reads the title or class of another window,
 so it cannot tell you what an active window is; ask the person.
+
+## Sending input
+
+Input needs the lease (see [Sharing the machine](#sharing-the-machine)). Read the screen first, send one thing, then read
+the capture in the answer:
+
+```sh
+cdctl observe --json                                            # look, and keep data.observation_id
+cdctl input key Escape --token TOKEN --json                     # a key
+cdctl input key w --hold-ms 800 --token TOKEN --json            # held, up to 10 seconds
+cdctl input click --x 540 --y 476 --observation OBS --token TOKEN --json
+cdctl input scroll --x 600 --y 500 --direction down --steps 3 --observation OBS --token TOKEN --json
+```
+
+Keys use X keysym names: `Escape`, `Return`, `space`, `e`, `F1`, `Shift_L`. A coordinate is in window pixels and needs an
+observation that still holds, so a capture from before a change of resolution is refused rather than converted.
+
+A key sent proves nothing about what it did. `changed` is null, `verification.method` is `caller_required` and
+`input.result` is under `not_verified`, so read `artifacts[0]`. Wait for what you expect with `--settle-ms`, and observe
+again if the screen is still changing.
+
+Every answer below means the input did not happen, or stopped, with everything released:
+
+| Code | Meaning | What to do |
+| --- | --- | --- |
+| `FOCUS_LOST` | The game does not have the focus, or lost it during a hold | Ask the person. Do not take the focus yourself |
+| `USER_INTERFERENCE` | A person or another program is using the input, or a key is already held | Stop, and tell the person |
+| `SYSTEM_DIALOG_PRESENT` | A dialog is or may be over the game | Report it and stop. Never answer or dismiss it |
+| `RESOLUTION_CHANGED`, `TARGET_CHANGED` | The window or the process is not the one you saw | Observe again |
+| `OBSERVATION_STALE` | The observation is older than `--max-age`, 120 seconds by default | Observe again |
+| `LEASE_LOST` | Someone took the lease over | Stop what you were doing |
+
+`actions` lists what really happened, also on failure, with how long each key was held and what released it.
+`released_by` is `cdctl`, `sentinel`, or `next_command` when the next input command will finish the job. `status` reports
+`input.state: left_held` in that last case, and `cdctl input release` clears it without sending anything else.
+
+On a desktop whose dialogs cdctl cannot see, input stops with `SYSTEM_DIALOG_PRESENT`. `--allow-unverified-dialogs` sends
+anyway and lists `system_dialogs` under `not_verified`. Use it only when you know what is on the screen.
+
+Input from a gamepad does not pass through the X server, so it is not noticed. A person on a gamepad can move the game at
+the same time as you.
 
 ## From a program
 

@@ -3,8 +3,21 @@
     { "$ref": "#/$defs/snapshot" },
     {
       "type": "object",
-      "required": ["lease"],
-      "properties": { "lease": { "$ref": "#/$defs/lease" } }
+      "required": ["lease", "input"],
+      "properties": {
+        "lease": { "$ref": "#/$defs/lease" },
+        "input": {
+          "type": "object",
+          "required": ["state"],
+          "description": "Whether a killed cdctl left something held. No input is sent to find out.",
+          "properties": {
+            "state": { "enum": ["clear", "in_progress", "left_held"] },
+            "pressed_at": { "type": "string" },
+            "request_id": { "type": "string" },
+            "count": { "type": "integer" }
+          }
+        }
+      }
     }
   ]
 }

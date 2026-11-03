@@ -31,6 +31,14 @@ module Cdctl
       @not_verified = not_verified
     end
 
+    # Adds what had already happened when this failure passes through the code that knows.
+    def record(actions:, changed:, target: nil)
+      @actions = actions
+      @changed = changed
+      @target ||= target
+      self
+    end
+
     def category = ErrorCodes.category(code)
 
     def exit_status = category.exit_status

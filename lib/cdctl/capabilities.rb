@@ -15,8 +15,6 @@ module Cdctl
     TESTED_COMPOSITORS = %w[hyprland].freeze
 
     PLANNED = [
-      ['input.key', %w[input key], 'Send a guarded key press with a guaranteed release'],
-      ['input.click', %w[input click], 'Send a guarded click in window coordinates'],
       ['game.launch', %w[game launch], 'Start the game through Steam and wait for it'],
       ['game.continue', %w[game continue], 'Continue the saved game from the title screen'],
       ['game.quit', %w[game quit], 'Quit through the game menu and confirm the process ended'],
@@ -49,7 +47,35 @@ module Cdctl
 
     def capabilities
       [discovery, build, process, window, resolution, modals, capture_x11, capture_grim, option_file, screen, lease,
-       *planned, hud]
+       input, watching_input, *planned, hud]
+    end
+
+    # Proving this would mean sending something to the game, which nothing here may do on its own.
+    def input
+      id = 'input'
+      summary = 'Send guarded keys, clicks and wheel turns, with a guaranteed release'
+      commands = ['input key', 'input click', 'input move', 'input scroll', 'input release']
+      return unsupported(id, summary) unless @snapshot.linux?
+      return entry(id, 'unavailable', summary, commands, @snapshot.x11[:reason]) unless x11_connected?
+      unless @snapshot.x11.dig(:extensions, 'XTEST')
+        return entry(id, 'unavailable', summary, commands, 'this X server has no XTEST extension')
+      end
+
+      entry(id, 'unverified', summary, commands, 'not tried here, because trying means sending input to the game')
+    end
+
+    def watching_input
+      id = 'input.other_sources'
+      summary = 'Notice input from a person or another program during a send, by device and never by key'
+      return unsupported(id, summary) unless @snapshot.linux?
+
+      seen = x11_connected? && @snapshot.x11.dig(:extensions, 'XInputExtension')
+      if seen
+        entry(id, 'available', summary,
+              ['input key'])
+      else
+        entry(id, 'unavailable', summary, [], 'no XInput on this server')
+      end
     end
 
     def lease
