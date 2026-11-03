@@ -1,0 +1,9 @@
+/.bundle/
+/coverage/
+/pkg/
+/tmp/
+*.gem
+mise.local.toml
+/vendor/
+# Real captures of the game stay on the machine that took them.
+/test/fixtures/real/

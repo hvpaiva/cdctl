@@ -1,0 +1,10 @@
+# The lockfile and synthetic fixtures hold no prose.
+[files]
+extend-exclude = [
+  "Gemfile.lock",
+  "test/fixtures/",
+]
+
+[default.extend-identifiers]
+# The open(2) flag.
+WRONLY = "WRONLY"

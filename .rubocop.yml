@@ -1,0 +1,82 @@
+plugins:
+  - rubocop-minitest
+  - rubocop-performance
+  - rubocop-rake
+
+# Exclude lists add to the defaults (tmp, node_modules, .git) instead of replacing them.
+inherit_mode:
+  merge:
+    - Exclude
+
+AllCops:
+  # Pending cops are opted in as they ship, so the configuration never lags a release.
+  NewCops: enable
+  # Mirrors required_ruby_version in the gemspec; RuboCop checks that they agree.
+  TargetRubyVersion: 3.4
+  # Bundler may vendor gems here; they are not this project's code.
+  Exclude:
+    - vendor/**/*
+
+Metrics/AbcSize:
+  # Binary decoders and report builders read many named fields; 30 keeps them on one screen.
+  Max: 30
+
+Metrics/BlockLength:
+  # Test bodies, the gemspec and rake tasks are declarative blocks, not logic.
+  Exclude:
+    - test/**/*
+    - '*.gemspec'
+    - Rakefile
+    - rakelib/**/*
+
+Metrics/ClassLength:
+  # Renderers and the store hold many small methods; 200 lines is the point at which to split them.
+  Max: 200
+  Exclude:
+    - test/**/*
+
+Metrics/CyclomaticComplexity:
+  # Observation code branches on what each source could prove, which is the point of the tool.
+  Max: 10
+  # The fake X server dispatches on the protocol's opcodes.
+  Exclude:
+    - test/support/fake_x_server.rb
+
+Metrics/MethodLength:
+  # 15 lines fits a whole case statement or a decoded reply without a private helper.
+  Max: 15
+  Exclude:
+    - test/**/*
+
+Metrics/ModuleLength:
+  Max: 200
+  Exclude:
+    - test/**/*
+
+Metrics/ParameterLists:
+  # Keyword arguments are named at every call site, so a long list of them stays readable.
+  CountKeywordArgs: false
+
+Metrics/PerceivedComplexity:
+  Max: 10
+
+Minitest/MultipleAssertions:
+  # A CLI test asserts status, stdout and stderr, often for two invocations.
+  Max: 8
+
+Naming/MethodParameterName:
+  # X11 and image code speaks in x, y, w and h.
+  AllowedNames: [x, y, w, h, id, io, op]
+
+Style/AsciiComments:
+  # Everything is written in English without emoji; the conventions test covers the rest of each file.
+  Enabled: true
+
+Style/Documentation:
+  # A cop that demands a comment on every class gets comments that restate the class name.
+  Enabled: false
+
+Style/DisableCopsWithinSourceCodeDirective:
+  # Exceptions to a cop live in this file, where they carry a reason, never inline.
+  Enabled: true
+  AllowedCops: []

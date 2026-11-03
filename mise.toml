@@ -1,0 +1,4 @@
+[tools]
+ruby = "4.0.9"
+typos = "1.50.3"
+zizmor = "1.30.1"
