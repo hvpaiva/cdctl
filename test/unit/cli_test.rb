@@ -162,7 +162,7 @@ class CommandLayerTest < Minitest::Test
   end
 
   def test_unknown_commands_suggest_the_right_one
-    _, _, err = @machine.run('schem')
+    _, _, err = @machine.run('schemata')
 
     assert_match(/Did you mean this\?\n\tschema/, err)
   end
