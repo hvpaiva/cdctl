@@ -845,6 +845,104 @@ class SentinelTest < Minitest::Test
   end
 end
 
+# The sentinel's logic without its process, so each decision can be watched step by step.
+class SentinelWatchTest < Minitest::Test
+  KEY_H = FakeXServer.keycode('h'.ord)
+  BUTTON = 3
+  WAIT = 5.0
+
+  def setup
+    @x = FakeXServer.new
+    @directory = Dir.mktmpdir('cdctl-watch-')
+    @journal = Cdctl::Input::Journal.new(@directory)
+    @connection = @x.opener.call(@x.display)
+    to_read, @to_write = IO.pipe
+    @from_read, from_write = IO.pipe
+    watch = Cdctl::Input::Sentinel::Watch.new(to_read, from_write, @connection, @journal)
+    @thread = Thread.new { watch.run }
+    line
+  end
+
+  def teardown
+    @thread.kill
+    @connection.close
+    @x.stop
+    FileUtils.remove_entry(@directory)
+  end
+
+  def line = (@from_read.gets if @from_read.wait_readable(WAIT))&.chomp
+
+  def tell(text)
+    @to_write.puts(text)
+    @to_write.flush
+  end
+
+  def arm(items, seconds: 30)
+    tell(JSON.generate(held: items, seconds:))
+
+    assert_equal 'armed', line
+  end
+
+  def press_key
+    @connection.fake_key(KEY_H, down: true)
+    @journal.write(held: [{ kind: 'key', code: KEY_H }])
+  end
+
+  def test_when_the_pipe_closes_it_releases_keys_and_buttons_and_clears_the_journal
+    arm([{ kind: 'key', code: KEY_H }, { kind: 'button', code: BUTTON }])
+    press_key
+    @connection.fake_button(BUTTON, down: true)
+    @to_write.close
+
+    assert @thread.join(WAIT)
+    assert_empty @x.keys_down
+    assert_empty @x.buttons_down
+    assert_nil @journal.read
+  end
+
+  def test_when_told_done_it_touches_nothing
+    arm([{ kind: 'key', code: KEY_H }])
+    press_key
+    tell('done')
+
+    assert @thread.join(WAIT)
+    assert_equal [KEY_H], @x.keys_down
+    refute_nil @journal.read
+  end
+
+  def test_with_nothing_held_a_closed_pipe_releases_nothing
+    arm([{ kind: 'key', code: KEY_H }])
+    arm([], seconds: nil)
+    @connection.fake_key(KEY_H, down: true)
+    @to_write.close
+
+    assert @thread.join(WAIT)
+    assert_equal [KEY_H], @x.keys_down
+  end
+
+  def test_a_deadline_releases_says_so_and_keeps_watching
+    arm([{ kind: 'key', code: KEY_H }], seconds: 0.02)
+    press_key
+
+    assert_equal 'expired', line
+    assert_empty @x.keys_down
+    assert_nil @journal.read
+    assert_predicate @thread, :alive?
+    arm([], seconds: nil)
+  end
+
+  def test_an_answer_nobody_reads_does_not_stop_it
+    @from_read.close
+    tell(JSON.generate(held: [{ kind: 'key', code: KEY_H }], seconds: 30))
+    sleep(0.02)
+    @connection.fake_key(KEY_H, down: true)
+    @to_write.close
+
+    assert @thread.join(WAIT)
+    assert_empty @x.keys_down
+  end
+end
+
 class ConnectionRefusalTest < Minitest::Test
   def setup
     @x = FakeXServer.new

@@ -12,8 +12,8 @@ real X server without the game. A setup missing from this table is untested, wha
 
 ## Input tried against the game
 
-Build 26361232, version 2.04.05, brazilian, 1920x1080, fullscreen, Hyprland 0.56.2 with Xwayland, Proton Experimental, on
-the title screen and in the settings menu. A key that does nothing there was held for each case.
+Build 26361232, version 2.04.05, brazilian, 1920x1080, fullscreen, Hyprland 0.56.2 with Xwayland, Proton 11.0-100, on the
+title screen and in the settings menu. A key that does nothing there was held for each case.
 
 | Case | Result |
 | --- | --- |

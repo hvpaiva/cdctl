@@ -225,7 +225,6 @@ module Cdctl
 
         def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       end
-      private_constant :Watch
     end
   end
 end
