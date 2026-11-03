@@ -41,8 +41,8 @@ module Cdctl
         record
       rescue Errno::ENOENT
         { generation: 0, state: 'free' }
-      rescue JSON::ParserError, SystemCallError, ArgumentError => e
-        raise Damaged, e.message.lines.first.to_s.strip
+      rescue JSON::ParserError, SystemCallError, ArgumentError, EncodingError => e
+        raise Damaged, e.message.scrub.lines.first.to_s.strip
       end
 
       def replace(record)
@@ -58,6 +58,17 @@ module Cdctl
         PrivateFiles.write(history, lines.last(HISTORY_KEEP).join) if lines.size > HISTORY_KEEP * 2
       rescue SystemCallError
         nil
+      end
+
+      # The highest generation the history mentions, for going on after the record itself was lost.
+      def last_generation
+        File.readlines(File.join(@directory, HISTORY_FILE)).filter_map do |line|
+          JSON.parse(line.scrub)['generation']
+        rescue JSON::ParserError
+          nil
+        end.grep(Integer).max.to_i
+      rescue SystemCallError
+        0
       end
 
       private
@@ -77,7 +88,12 @@ module Cdctl
         return false unless record.is_a?(Hash) && record[:generation].is_a?(Integer)
         return record[:state] == 'free' unless record[:state] == 'held'
 
-        Time.iso8601(record[:renewed_at].to_s) && record[:token_sha256].is_a?(String) && record[:owner].is_a?(String)
+        Time.iso8601(record[:renewed_at].to_s) && record[:token_sha256].is_a?(String) && record[:owner].is_a?(String) &&
+          holder?(record[:holder])
+      end
+
+      def holder?(holder)
+        holder.nil? || (holder.is_a?(Hash) && holder[:pid].is_a?(Integer) && holder[:start_ticks].is_a?(Integer))
       end
 
       def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)

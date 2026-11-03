@@ -214,13 +214,54 @@ class LeaseTest < Minitest::Test
     assert_equal 'agent-b', acquire('agent-b', takeover: true, force: true, reason: 'damaged').first[:owner]
   end
 
-  def test_a_file_of_the_wrong_shape_counts_as_damaged
-    ['[]', '{"generation":"7","state":"free"}', '{"generation":1,"state":"held","renewed_at":"soon"}',
-     '{"generation":1}'].each do |text|
-      File.write(File.join(@directory, 'lease.json'), text)
+  def test_a_zombie_counts_as_gone
+    Dir.mktmpdir('cdctl-proc-') do |root|
+      FileUtils.mkdir_p(File.join(root, '5'))
+      File.write(File.join(root, '5', 'stat'), "5 (a b) Z #{Array.new(18, 0).join(' ')} 77 0\n")
 
-      assert_equal 'unknown', lease.status[:state], text
+      assert_nil Cdctl::Lease.start_ticks(root, 5)
+      File.write(File.join(root, '5', 'stat'), "5 (a b) S #{Array.new(18, 0).join(' ')} 77 0\n")
+
+      assert_equal 77, Cdctl::Lease.start_ticks(root, 5)
     end
+  end
+
+  def test_a_file_of_the_wrong_shape_counts_as_damaged
+    held = '"state":"held","renewed_at":"2026-11-03T10:00:00Z","token_sha256":"x","owner":"o"'
+    ['[]', '{"generation":"7","state":"free"}', '{"generation":1,"state":"held","renewed_at":"soon"}',
+     '{"generation":1}', %({"generation":1,#{held},"holder":5}), %({"generation":1,#{held},"holder":{"pid":"x"}}),
+     "\xFF\xFE not text"].each do |text|
+      File.binwrite(File.join(@directory, 'lease.json'), text)
+
+      assert_equal 'unknown', lease.status[:state], text.inspect
+    end
+  end
+
+  def test_each_way_of_using_a_damaged_file_answers_with_a_reason
+    File.write(File.join(@directory, 'lease.json'), 'not json')
+    token = "cdl-1-#{'0' * 32}"
+
+    assert_code('PRECONDITION_FAILED') { lease.renew(token, request_id: REQUEST) }
+    assert_code('PRECONDITION_FAILED') { lease.release(token, request_id: REQUEST) }
+    assert_code('PRECONDITION_FAILED') { lease.touch(token, request_id: REQUEST) }
+    assert_code('PRECONDITION_FAILED') { lease.verify!(nil) }
+  end
+
+  def test_replacing_a_damaged_file_is_a_takeover_like_any_other
+    _, old = acquire
+    lease.release(old, request_id: REQUEST)
+    _, second = acquire('agent-b')
+    lease.release(second, request_id: REQUEST)
+    File.write(File.join(@directory, 'lease.json'), 'not json')
+
+    assert_raises(Cdctl::CLI::UsageError) { acquire('agent-c', takeover: true, force: true) }
+
+    report, = acquire('agent-c', takeover: true, force: true, reason: 'it was damaged')
+
+    assert_equal 3, report[:generation]
+    logged = history.find { it[:damaged] }
+
+    assert_equal ['takeover', true, 'it was damaged'], logged.values_at(:event, :damaged, :reason)
   end
 
   # Several real processes, because a lock that only works inside one process proves nothing.

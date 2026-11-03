@@ -28,6 +28,7 @@ module Cdctl
     MAX_TEXT = 200
     VALID_TEXT = /\A[[:print:]]+\z/
     START_TICKS_FIELD = 19
+    ZOMBIE = 'Z'
 
     def self.for(runtime)
       new(directory: runtime.paths.lease_dir, machine: machine(runtime.proc_root))
@@ -38,10 +39,14 @@ module Cdctl
                   start_ticks_of: ->(pid) { start_ticks(proc_root, pid) })
     end
 
-    # comm can hold spaces and parentheses, so fields count from the last closing parenthesis.
+    # comm can hold spaces and parentheses, so fields count from the last closing parenthesis. A
+    # zombie has ended and only waits for its parent, so it answers as gone.
     def self.start_ticks(proc_root, pid)
       text = read_text(File.join(proc_root, pid.to_s, 'stat'))
-      text && text.rpartition(') ').last.split[START_TICKS_FIELD]&.to_i
+      return nil unless text
+
+      fields = text.rpartition(') ').last.split
+      fields.first == ZOMBIE ? nil : fields[START_TICKS_FIELD]&.to_i
     end
 
     def self.read_text(path)
@@ -68,7 +73,7 @@ module Cdctl
       validate_text('purpose', purpose)
       token = nil
       record = @store.locked do
-        current = current_for_acquire(takeover:, force:)
+        current = current_for_acquire(takeover:, force:, reason:, request_id:)
         refuse_acquire(current, takeover:, force:, reason:) if held?(current)
         token = new_token(current.fetch(:generation, 0) + 1)
         take(current, new_record(token, owner, purpose, holder_pid, request_id), request_id, reason)
@@ -84,7 +89,7 @@ module Cdctl
     # changes nothing. The token stays recorded only until the next acquire.
     def release(token, request_id:)
       @store.locked do
-        current = @store.read
+        current = readable
         next [report(current), false] if current[:state] == 'free' && owns?(current, token)
 
         verified(current, token)
@@ -97,10 +102,7 @@ module Cdctl
     # What every send asks. It only reads, since it runs before each key press.
     def verify!(token)
       refuse_missing unless token
-      verified(@store.read, token)
-    rescue Store::Damaged => e
-      raise Error.new("the lease file cannot be read: #{e.message}", code: 'PRECONDITION_FAILED',
-                                                                     next_steps: damaged_steps)
+      verified(readable, token)
     end
 
     def touch(token, request_id:)
@@ -119,15 +121,28 @@ module Cdctl
     end
 
     def heartbeat(token, request_id)
-      @store.replace(verified(@store.read, token).merge(renewed_at: stamp, last_request_id: request_id))
+      @store.replace(verified(readable, token).merge(renewed_at: stamp, last_request_id: request_id))
     end
 
-    def current_for_acquire(takeover:, force:)
+    def readable
       @store.read
     rescue Store::Damaged => e
-      return { generation: 0, state: 'free' } if takeover && force
+      raise Error.new("the lease file cannot be read: #{e.message}", code: 'PRECONDITION_FAILED',
+                                                                     next_steps: damaged_steps)
+    end
 
-      raise Error.new("the lease file cannot be read: #{e.message}", code: 'LEASE_BUSY', next_steps: damaged_steps)
+    # Replacing a file nobody can read is a takeover like any other: explicit, explained and logged.
+    # The generation goes on from the history, so an old token stays older than the new one.
+    def current_for_acquire(takeover:, force:, reason:, request_id:)
+      @store.read
+    rescue Store::Damaged => e
+      unless takeover && force
+        raise Error.new("the lease file cannot be read: #{e.message}", code: 'LEASE_BUSY', next_steps: damaged_steps)
+      end
+      raise CLI::UsageError, '--takeover needs a --reason, which goes in the log' if reason.to_s.strip.empty?
+
+      @store.log({ event: 'takeover', at: stamp, damaged: true, reason:, request_id: })
+      { generation: @store.last_generation, state: 'free' }
     end
 
     def damaged_steps
@@ -179,7 +194,7 @@ module Cdctl
     end
 
     def refuse_missing
-      current = @store.read
+      current = readable
       if held?(current)
         raise Error.new("sending input needs the lease, and #{current[:owner]} holds it: #{current[:purpose]}",
                         code: 'LEASE_BUSY', data: report(current),
