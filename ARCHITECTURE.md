@@ -1,0 +1,112 @@
+# Architecture
+
+## The rule everything follows
+
+cdctl works on any machine that runs the game, so what is true of one machine never reaches the code. Facts about
+the game itself (its Steam app id, its executable) are constants in `lib/cdctl/game.rb`. Everything else is
+discovered at run time, and what cannot be discovered is reported as unknown. `test/unit/conventions_test.rb`
+refuses home directories, video output names, fixed display sizes and desktop-specific helpers in shipped code.
+
+## Layers
+
+```text
+cli/            Command registry, parser, help, exit statuses. Knows nothing about the game.
+commands/       One class per command. Each returns a Result or raises an Error.
+invocation.rb   The result contract.
+error_codes.rb  Stable error codes and the exit status of each category.
+
+observer.rb     One look at the machine, read only. Produces a Snapshot.
+snapshot.rb     What that look found, and the refusals for commands that need the game.
+
+steam/          Steam's own files: roots, libraries, manifests.
+game/           The game's process, option file and version.
+x11/            An X11 client over the Unix socket, in Ruby alone.
+game_window.rb  Finds the game's window on one X server.
+compositor.rb   Optional enrichment from a compositor driver.
+modals.rb       Whether a system dialog may be over the game.
+resolution.rb   Every number called a resolution, kept apart.
+capture/        Frames, PNG writing and the capture backends.
+ledger.rb       First sighting of each process, for detecting later display changes.
+observation_store.rb  What a caller last saw, for refusing stale coordinates.
+
+capabilities.rb What works here, proven by trying it.
+doctor.rb       What is missing here, and how to fix it.
+```
+
+## Decisions
+
+### X11 first, compositor optional
+
+The game draws through X on every Proton setup that does not opt into native Wayland, whatever the desktop is. Talking
+to the game's own X server covers GNOME, KDE, wlroots compositors, plain X sessions and a nested gamescope with one
+code path. Its address comes from the game's `DISPLAY`, and the desktop's is tried only when that one cannot be reached,
+as with a sandboxed Steam, whose number exists only inside the sandbox. The window's own properties then prove whether
+it was the right server. Reading the window itself also means that a capture and a coordinate share one pixel space,
+which spares every compositor's scaling rules, and that a capture holds only the game wherever a compositing manager
+keeps windows apart. Where none does, the result says so.
+
+A compositor driver adds what X cannot see: the real monitor mode, whether the game is the active window and the
+surfaces drawn over the game. Each answer it cannot give becomes unknown and appears in `not_verified`. It keeps nothing
+about any other window. Adding a desktop means adding a driver, and nothing else changes.
+
+### Clear needs proof
+
+`modals.status` is `clear` only when the game is the active window, the session is known not to be locked and nothing on
+the overlay or top layer can be over it. A prompt can be an ordinary window, which only shows as another window being
+active, so that case is `unverified` rather than `clear`, and telling them apart would mean reading another program's
+window. A surface that can be a prompt stops every capture, including the one backend that would not show it, because
+the person has a decision to make.
+
+### Two looks around a screen capture
+
+grim reads the composited screen, where anything on top of the game ends up in the file. A state read earlier says nothing
+about the moment the pixels were taken, so `Capture::ScreenGuard` asks the compositor again before and after, and the
+frame is kept only if both looks prove the game alone was on that rectangle. X11 stays the first choice.
+
+### No dependencies
+
+The X11 client, the PNG writer and the option file reader are small and written here, so the gem has no runtime
+dependency and no native extension. libX11, libXtst and an image library were each avoidable, and each would be one
+more thing that differs between machines.
+
+### No service
+
+Nothing keeps running between commands. The cost is that a display mode at launch is known only when cdctl itself
+launched the game; for a game started elsewhere, the ledger records the first sighting and detects changes from there.
+Before that sighting the answer is unknown.
+
+### Unknown is an answer
+
+A value is reported with where it came from, or as unknown with a reason. Nothing is filled in because it is usually
+true. In particular, a window's size is never reported as the game's resolution, and a field missing from the
+option file is reported as missing.
+
+### Secrets stay out
+
+Only a fixed list of variables is read from another process's environment. X11 cookies go to the X server and nowhere
+else. cdctl reads named files only, and never scans the directories of other tools.
+
+## What is known about the game's resolution
+
+From captures and option files of one installation, build 26361232:
+
+| Screen the game sees | Window | `_viewportSize` | Menu | Image |
+| --- | --- | --- | --- | --- |
+| 3440x1440 | 3440x1440 | absent | 3440X1440 | One to one |
+| 3440x1440 | 3440x1440 | 2560 1440 | 2560X1440 | Stretched horizontally by exactly 3440/2560 |
+| 2560x1440, nested | 3440x1440 outside | absent | 2560X1440 | Side bars, from the nested compositor's fit mode |
+
+The field appeared in 4 of 38 stored option files, each time with a resolution chosen in the menu that differed from
+the screen. The likely rule is that it exists only when the choice differs from the screen, and that without it the
+game follows the screen at launch. That rule has not been tested on purpose, so cdctl reports the field and does not
+predict from it, beyond inferring `stretched` or `native` from a stored resolution. With no stored resolution it answers
+unknown: a mode changed after the launch leaves a window that fills the screen around an image of the old size, and
+cdctl did not see the launch.
+
+The game writes the file when settings are applied and not when it starts: a running process was seen to be two hours
+newer than the file. So a file older than the process is the one the process read, and a newer one may describe nothing
+yet, which makes `presentation` unknown.
+
+Layout measured on one settings tab: within 16:9, positions scale with height to within 3 pixels between 1080p and
+1440p. At 3440x1440, sizes and vertical positions match the 2560x1440 frame, and horizontal positions gain a margin of
+40 pixels on both sides. A UI profile therefore needs an edge reference and a margin per aspect ratio, not one scale.
