@@ -38,8 +38,7 @@ module Cdctl
         display_mode: @display, game_screen: @screen, window: window_fact, capture: Fact.unknown(NO_CAPTURE),
         configured_override: option(:viewport_size), active: Fact.unknown(ACTIVE_UNKNOWN),
         render_scale: option(:upscale_resolution), hud_scale: option(:hud_scale),
-        presentation:, launch_display_mode: Fact.unknown(NOT_LAUNCHED_HERE), coherence:,
-        first_seen: @baseline&.first_seen
+        presentation:, launch_display_mode:, coherence:, first_seen: @baseline&.first_seen
       }.compact
     end
 
@@ -54,6 +53,11 @@ module Cdctl
     end
 
     private
+
+    def launch_display_mode
+      launch = @baseline&.launch_display
+      launch ? Fact.known(launch, source: 'cdctl_launch') : Fact.unknown(NOT_LAUNCHED_HERE)
+    end
 
     # A window alone can change with the display untouched: a splash becomes the game, or the person
     # resizes it. Only a display change is known to damage the image.
@@ -88,11 +92,21 @@ module Cdctl
     end
 
     def from_override(override)
-      return Fact.unknown(NOTHING_STORED) unless override
+      return from_launch unless override
       return inferred(mode: 'native') if size(@window) == override
 
       inferred(mode: 'stretched', rendered: override, scale_x: ratio(@window.width, override[:width]),
                scale_y: ratio(@window.height, override[:height]))
+    end
+
+    # With nothing stored the game takes the display at launch, and cdctl saw that moment only if it
+    # launched the game. The window then matching that display says the image fills it one to one.
+    def from_launch
+      launch = @baseline&.launch_display
+      return Fact.unknown(NOTHING_STORED) unless launch
+      return inferred(mode: 'native') if launch.slice(:width, :height) == size(@window)
+
+      Fact.unknown('the window does not match the display at launch, and nothing says what the image is')
     end
 
     def inferred(**value) = Fact.known(value, source: 'option_file+x11', confidence: 'inferred')

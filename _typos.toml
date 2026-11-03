@@ -1,7 +1,8 @@
-# The lockfile and synthetic fixtures hold no prose.
+# The lockfile and synthetic fixtures hold no prose, and a profile holds labels in the game's language.
 [files]
 extend-exclude = [
   "Gemfile.lock",
+  "lib/cdctl/profiles/",
   "test/fixtures/",
 ]
 

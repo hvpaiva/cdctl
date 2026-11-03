@@ -10,9 +10,10 @@ machine that runs the game, needs no hook, driver or service, and depends on not
 It replaces fragile sequences of clicks and key presses with operations that state what they found,
 what they did and how they checked it. It is not a combat bot, a save editor or a system manager.
 
-**Status: observing and guarded low-level input work.** Menus and settings are listed as
-`not_implemented` by `cdctl capabilities` until they exist. Nothing is sent to the game unless a
-command asks for it and holds the input lease.
+**Status: observing, guarded input, menus, the game's lifecycle and the keyboard preset work on the
+one build, language and aspect ratio with a profile** (see [Supported machines](#supported-machines)).
+Everywhere else, observing and low-level input still work and the rest answers with the reason.
+Nothing is sent to the game unless a command asks for it and holds the input lease.
 
 ## Install
 
@@ -71,6 +72,9 @@ New to it as an agent? Read [the agent guide](docs/agent-guide.md).
 | `cdctl lease status\|acquire\|renew\|release` | Coordinates exclusive ownership of input between programs |
 | `cdctl input key\|click\|move\|scroll` | Sends guarded input to the focused game, with a release that survives `kill -9` |
 | `cdctl input release` | Releases what a killed cdctl left held |
+| `cdctl menu open\|back` | Reaches a menu by what it is, and proves it. A menu already open stays open |
+| `cdctl game launch\|continue\|quit` | Starts the game through Steam, enters the saved game, leaves through the menu |
+| `cdctl settings list\|get\|plan\|set` | Reads settings, and changes one through the menu, proving nothing else changed |
 
 `cdctl COMMAND --help` documents each one.
 
@@ -98,6 +102,26 @@ window is refused.
 | An error, a timeout or a signal | cdctl itself |
 | `kill -9` | A second process that watches it, in a session of its own |
 | `kill -9` on both | The next `cdctl input` command, from a journal written before the press. `cdctl status` reports it |
+
+## Working by screen
+
+On a build with a UI profile, cdctl recognizes the screen, and commands say what they want instead of which keys to press:
+
+```sh
+cdctl game launch --token TOKEN --json              # through Steam, with its launch options
+cdctl game continue --token TOKEN --json            # from the title screen to the world
+cdctl menu open settings.input --token TOKEN --json
+cdctl settings set keyboard_mouse_preset classic --apply --token TOKEN --json
+cdctl game quit --graceful --token TOKEN --json     # through the menu, and it never kills anything
+```
+
+Each answer has the screen before and after, the inputs really sent, and the proof: `visual_anchors` for a screen,
+`option_file` for a setting, `process` for the game ending. `settings set` compares the option file with the plan and
+fails if anything else changed, and the answer holds the command that undoes it.
+
+Each step sends once and waits for the screen it expects. The game can stall for seconds on a menu change, and a second
+key would close what the first one opened, so nothing is ever repeated for lack of a reaction. A screen that is not
+recognized answers `UNKNOWN_SCREEN` and sends nothing.
 
 ## The result contract
 
@@ -178,7 +202,8 @@ depends on one desktop. What a machine lacks is reported as unknown or unsupport
 
 | Setup | State |
 | --- | --- |
-| Linux, Proton, Hyprland | Tested with the game |
+| Linux, Proton, Hyprland, build 26361232 in brazilian at 16:9 | Tested with the game, every command |
+| Linux, Proton, Hyprland, any other build, language or aspect ratio | Observation and low-level input. The rest answers `UNSUPPORTED_BUILD` until a profile covers it |
 | Linux, Proton, another Xwayland desktop (GNOME, KDE, Sway) or an X session | Same path, not yet tested with the game; system dialogs cannot be seen, so input needs `--allow-unverified-dialogs` |
 | Linux, Proton with gamescope | Observed as nested, not yet tested with the game |
 | Linux, native Wayland Proton | The game has no X window, so observation answers `WINDOW_NOT_FOUND` |
@@ -205,8 +230,9 @@ as globs) and `evidence_keep` (how many captures to keep, 100 by default).
 ## What it reads and writes
 
 It reads Steam's library and manifest files, `/proc`, the game's X server, the compositor's status and
-the game's option file. It never writes to the game's files, its saves or its settings. It sends input
-only when an `input` command asks for it.
+the game's option file. It never writes to the game's files, its saves or its settings: a setting changes
+only through the game's own menu. It sends input and starts the game only when a command asks for it.
+Entering the world lets the game autosave, as playing does.
 
 It writes only under `$XDG_STATE_HOME/cdctl`, with files readable by their owner alone: captures, which
 can show what is on your screen, small records of observations, the input lease with its history, and

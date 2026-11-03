@@ -398,9 +398,16 @@ class FakeXServer
   # A window's pixel can be a callable of window coordinates, which proves a capture reads the
   # rectangle it asked for and not some other one of the same size.
   def pixels_of(window, left, top, width, height)
+    return slice_of(window, left, top, width, height) if window.pixel.is_a?(String)
     return [window.pixel].pack('V') * (width * height) unless window.pixel.respond_to?(:call)
 
     (top...(top + height)).flat_map { |y| (left...(left + width)).map { |x| window.pixel.call(x, y) } }.pack('V*')
+  end
+
+  # A window can hold a whole frame already packed, which a test draws once.
+  def slice_of(window, left, top, width, height)
+    stride = window.width * 4
+    (top...(top + height)).map { window.pixel.byteslice((it * stride) + (left * 4), width * 4) }.join
   end
 
   def extension_reply(body, sequence)

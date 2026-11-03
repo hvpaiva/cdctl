@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["modals", "activity", "steps"],
+  "properties": {
+    "modals": { "$ref": "#/$defs/snapshot/properties/modals" },
+    "activity": { "$ref": "#/$defs/input_activity" },
+    "steps": { "type": "integer", "description": "How many inputs it took. Zero means nothing was sent." }
+  }
+}

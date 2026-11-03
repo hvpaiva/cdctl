@@ -21,3 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cdctl status` reports who holds the input lease.
 - `cdctl input key`, `click`, `move` and `scroll` send guarded input to the focused game, checking the lease, the process, the geometry, the focus, system dialogs and other input before every send and during every hold.
 - A key or button is released on an error, a signal or `kill -9`, by the command, by a sentinel process or by the next command from a journal. `cdctl input release` and `cdctl status` cover the last case.
+- `cdctl observe` names the screen where a UI profile covers the build, language and aspect ratio, from reduced signatures with no game pixels. `cdctl input key --expect-screen` uses the same recognition as its check.
+- `cdctl menu open` reaches a menu and proves it, sending nothing when it is already open, and `cdctl menu back` leaves one by the way known for it.
+- `cdctl game launch`, `continue` and `quit` start the game through Steam, enter the saved game and leave through the menu, proving each result and never killing anything. A launch through cdctl records the display at that moment, which makes `presentation` known.
+- `cdctl settings list`, `get`, `plan` and `set` read settings, and change the keyboard preset through the menu, comparing the option file with the plan and giving the way back.

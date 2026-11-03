@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["settings", "file"],
+  "properties": {
+    "settings": { "type": "array", "items": { "$ref": "#/$defs/setting" } },
+    "file": { "type": "string" },
+    "modified_at": { "type": "string" }
+  }
+}

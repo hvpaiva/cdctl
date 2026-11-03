@@ -28,7 +28,31 @@ title screen and in the settings menu. A key that does nothing there was held fo
 | A real authentication prompt opened over the game during a hold | `SYSTEM_DIALOG_PRESENT`, released after 651 ms |
 | The same prompt while idle | `status` says `present`; `observe`, `screenshot` and `input` answer `SYSTEM_DIALOG_PRESENT`. X11 and the compositor both still say the game has the focus |
 
-Motion from a real mouse has not been tried. A warp by the compositor produces no raw motion event.
+| Motion from a real pointer device during a hold | `USER_INTERFERENCE`, `motion: 4`, released after 501 ms |
+
+A warp by the compositor produces no raw motion event, so it goes unnoticed. A real device does not.
+
+## Screens and commands tried against the game
+
+Same setup, on the keyboard presets Standard and Classic, with the HUD scale at 90.
+
+| Command | Result |
+| --- | --- |
+| `observe` | Every screen named below recognized. 83 stored real frames were all labeled correctly, and loading frames answer unknown |
+| `menu open` | `map`, `inventory`, `journal`, `skills`, `others`, `settings.video`, `settings.input`, `settings.gameplay`, from the world and between each other |
+| `menu open map`, with the map already open | Nothing sent, and the map stays open |
+| `menu open settings.input` from the title | Works. `menu open map` from the title is refused with nothing sent |
+| `menu back` | Menu to world, settings to menu, settings to title, and nothing sent in the world |
+| `game launch` | Through Steam, with its launch options. The title screen is recognized with the prompts of a controller and of a keyboard |
+| `game continue` | Title to world in 57 seconds, with one key |
+| `game quit` | From the world and from settings: through the menu and the dialog, 8 to 11 seconds, process gone. From the title: holding the exit key, 4 seconds, with no dialog. Already closed: nothing sent |
+| `settings set keyboard_mouse_preset` | Both ways. Exactly one element changes in the option file, and after coming back it holds the same values in the same order, differing only in an id the game regenerates |
+| `input key --expect-screen` | World to map, verified by the anchors |
+
+Shortcuts `M`, `I`, `J` and `K` work the same in both presets.
+
+Not yet covered: any other screen, cutscenes, a dialog other than the two named here, the map or the inventory with a
+controller, and an ultrawide window, whose layout was measured on one tab only and has no profile.
 
 ## Measured on the same setup, without running cdctl
 

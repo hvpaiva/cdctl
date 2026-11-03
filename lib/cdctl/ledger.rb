@@ -11,7 +11,7 @@ module Cdctl
   class Ledger
     KEEP = 32
 
-    Record = Data.define(:first_seen_at, :window_size, :display_size, :fresh) do
+    Record = Data.define(:first_seen_at, :window_size, :display_size, :fresh, :launch_display) do
       def fresh? = fresh
 
       def first_seen = { at: first_seen_at, window: window_size, display: display_size }.compact
@@ -34,6 +34,17 @@ module Cdctl
       read(identity) || store(identity, window:, display:)
     end
 
+    # Added to the record of a process cdctl itself started. The file exists by then: looking at the
+    # process is how this was reached.
+    def note_launch(identity, display)
+      data = JSON.parse(File.read(path(identity)), symbolize_names: true)
+      return if data[:launch_display]
+
+      PrivateFiles.write(path(identity), JSON.generate(data.merge(launch_display: display.value)))
+    rescue SystemCallError, JSON::ParserError
+      nil
+    end
+
     private
 
     def path(identity) = File.join(@directory, "#{identity}.json")
@@ -43,7 +54,7 @@ module Cdctl
       return nil unless data.is_a?(Hash) && data[:first_seen_at]
 
       Record.new(first_seen_at: data[:first_seen_at], window_size: data[:window], display_size: data[:display],
-                 fresh: false)
+                 fresh: false, launch_display: data[:launch_display])
     rescue SystemCallError, JSON::ParserError
       nil
     end
@@ -53,7 +64,7 @@ module Cdctl
       PrivateFiles.directory(@directory)
       PrivateFiles.write(path(identity), JSON.generate(first_seen_at: at, window:, display:))
       PrivateFiles.keep_newest(@directory, '*.json', KEEP)
-      Record.new(first_seen_at: at, window_size: window, display_size: display, fresh: true)
+      Record.new(first_seen_at: at, window_size: window, display_size: display, fresh: true, launch_display: nil)
     rescue SystemCallError
       nil
     end

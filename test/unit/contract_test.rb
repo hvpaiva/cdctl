@@ -326,9 +326,7 @@ class CapabilitiesTest < Minitest::Test
   end
 
   def test_planned_work_is_listed_as_such
-    %w[game.launch game.quit menu.open settings.set].each do |id|
-      assert_equal 'not_implemented', capability(id)[:state], id
-    end
+    assert_equal 'not_implemented', capability('diagnostics.performance')[:state]
   end
 
   def test_the_hud_depends_on_a_mod

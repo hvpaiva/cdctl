@@ -15,8 +15,7 @@ module Cdctl
     # then a look at the game, then the lease and the guards, and only then a send. A capture closes
     # it, because a key press proves nothing about what it did.
     class InputBase < Base
-      include Capturing
-      include LeaseToken
+      include Sending
 
       # One run of a command, so its steps do not each take the same six arguments.
       Turn = Data.define(:invocation, :runtime, :opts, :snapshot, :plan)
@@ -56,46 +55,62 @@ module Cdctl
           snapshot = observer.snapshot
           snapshot.require_window!
           check_observation(runtime, snapshot, opts)
-          run(observer, Turn.new(invocation:, runtime:, opts:, snapshot:, plan:))
+          turn = Turn.new(invocation:, runtime:, opts:, snapshot:, plan:)
+          with_session(observer, runtime, invocation, snapshot, opts) do |session|
+            before = expected_screen_before(observer, turn)
+            act(session, snapshot, plan)
+            finish(turn, session, await_screen(observer, turn, session), before)
+          end
         end
       end
 
-      def run(observer, turn)
-        Input::Session.open(**session_options(observer, turn)) do |session|
-          act(session, turn.snapshot, turn.plan)
-          finish(turn, session)
-        rescue Error => e
-          raise e.record(actions: session.sender.actions, changed: changed_by(session), target: turn.snapshot.target)
-        rescue SignalException => e
-          raise Error.new("stopped by #{e.signm}", code: 'INTERRUPTED', actions: session.sender.actions,
-                                                   changed: changed_by(session), target: turn.snapshot.target)
+      # Only for a caller that said which screen to expect. The rest read the capture.
+      def expected_screen_before(observer, turn)
+        return nil unless turn.opts[:expect_screen]
+
+        profile = require_profile(turn.runtime, turn.snapshot)
+        eyes_for(observer, turn.snapshot, profile).look
+      end
+
+      def await_screen(observer, turn, session)
+        expected = turn.opts[:expect_screen]
+        return nil unless expected
+
+        profile = require_profile(turn.runtime, turn.snapshot)
+        unless profile.screen_names.include?(expected)
+          raise Error.new("this profile does not know a screen called #{expected}", code: 'UNSUPPORTED_BUILD')
         end
+
+        Driving::Navigator.new(session:, eyes: eyes_for(observer, turn.snapshot, profile), profile:,
+                               window: turn.snapshot.window).wait_for([expected])
       end
 
-      def session_options(observer, turn)
-        process = turn.snapshot.process
-        { runtime: turn.runtime, connection: observer.connection, snapshot: turn.snapshot,
-          token: token_from(turn.runtime, turn.opts), allow_unverified: turn.opts[:allow_unverified_dialogs],
-          request_id: turn.invocation.request_id, compositor: observer.compositor_probe(process),
-          opener: observer.connection_opener(process) }
-      end
-
-      # Nothing sent changed nothing. Once something was sent, only the caller can say what it did.
-      def changed_by(session) = session.sender.actions.empty? ? false : nil
-
-      def finish(turn, session)
-        sleep(turn.opts[:settle_ms].to_i / 1000.0) unless turn.opts[:no_capture]
+      def finish(turn, session, match, before)
+        sleep(turn.opts[:settle_ms].to_i / 1000.0) unless turn.opts[:no_capture] || match
         Observer.open(turn.runtime) do |observer|
           after = observer.snapshot
           artifact = evidence(observer, after, turn)
           turn.invocation.success(
             data: { modals: after.modals, activity: session.activity_report, recovered: session.recovered }.compact,
-            target: after.target || turn.snapshot.target, changed: nil, actions: session.sender.actions,
-            before: turn.snapshot.fingerprint, after: after.fingerprint,
-            verification: { method: 'caller_required', screenshot: artifact&.fetch(:path, nil) }.compact,
-            artifacts: [artifact].compact, not_verified: notes(after, artifact, session), next_steps: [CALLER_CHECKS]
+            target: after.target || turn.snapshot.target, changed: match ? before&.name != match.name : nil,
+            actions: session.sender.actions, **states(turn, after, match, before),
+            verification: verification(match, artifact, turn),
+            artifacts: [artifact].compact, not_verified: notes(after, artifact, session, match),
+            next_steps: match ? [] : [CALLER_CHECKS]
           )
         end
+      end
+
+      def states(turn, after, match, before)
+        { before: turn.snapshot.fingerprint.merge({ screen: before&.name }.compact),
+          after: after.fingerprint&.merge({ screen: match&.name }.compact) }
+      end
+
+      def verification(match, artifact, turn)
+        screenshot = artifact&.fetch(:path, nil)
+        return { method: 'caller_required', screenshot: }.compact unless match
+
+        { method: 'visual_anchors', screenshot:, expected: turn.opts[:expect_screen], observed: match.to_h }.compact
       end
 
       # The game may have closed because of this input, which is an answer and not a failure.
@@ -107,8 +122,8 @@ module Cdctl
         nil
       end
 
-      def notes(after, artifact, session)
-        list = ['input.result']
+      def notes(after, artifact, session, match)
+        list = match ? [] : ['input.result']
         list += artifact ? capture_notes(after, artifact) : after.not_verified
         (list + session.not_verified).uniq
       end
@@ -213,6 +228,8 @@ module Cdctl
          CLI::Option.new(long: 'observation', argument: 'ID', description: 'Also require this observation to hold.'),
          CLI::Option.new(long: 'max-age', argument: 'SECONDS', default: DEFAULT_MAX_AGE.to_s,
                          description: 'Refuse an observation older than this.'),
+         CLI::Option.new(long: 'expect-screen', argument: 'SCREEN',
+                         description: 'Wait for this screen, and fail with VERIFY_FAILED if it does not come.'),
          *COMMON_OPTIONS]
       end
       private_class_method :options

@@ -13,8 +13,9 @@ cdctl observe --json                       # the same, plus a capture and an obs
 cdctl observation check OBS_ID --json      # is that observation still true?
 ```
 
-`menu`, `settings` and `game` answer `NOT_IMPLEMENTED` with exit status 4 for now. Check `cdctl capabilities` rather
-than assuming a command exists.
+To act, see [Working by screen](#working-by-screen), which is what you usually want, and [Sending input](#sending-input)
+for what it does not cover. Check `cdctl capabilities` rather than assuming a command works here: anything needing a UI
+profile answers `UNSUPPORTED_BUILD` where none covers this build, language and aspect ratio.
 
 ## Reading a result
 
@@ -30,9 +31,10 @@ than assuming a command exists.
 
 ## Looking at the screen
 
-`data.screen` is unknown until a UI profile exists, so read the image. `artifacts[0].path` is a PNG of the game
-window, and `width` and `height` are its real size in pixels. Your image viewer may scale it; coordinates
-always refer to the real size.
+`data.screen` names the screen where a profile covers this game: `title`, `world`, `menu.map`, `settings.input`. Unknown
+comes with the reason, and a loading screen is unknown too, so read the image then. `artifacts[0].path` is a PNG of the
+game window, and `width` and `height` are its real size in pixels. Your image viewer may scale it; coordinates always
+refer to the real size.
 
 ```sh
 cdctl screenshot --region 0,650,500,430 --zoom 4 --output /tmp/corner.png --json
@@ -73,6 +75,8 @@ ratios.
   and `resolution.presentation` says so when a stored resolution shows it. With nothing stored, or a file newer
   than the process, it stays unknown. Do not read that as native.
 - `resolution.active` stays unknown: the game does not publish it. Reading the video menu is the only source.
+- `resolution.presentation` is also known with nothing stored when `cdctl game launch` started the game, since it recorded
+  the display at that moment in `launch_display_mode`.
 - If `resolution.coherence` says `display_changed`, the image may be cropped or stretched. cdctl will not fix it
   and neither should you without being asked. The known remedy on tested setups is to restart the game
   with the display already at the wanted mode, which is the user's decision. `window_changed` means the window
@@ -92,10 +96,42 @@ On `present`, `observe` and `screenshot` answer `SYSTEM_DIALOG_PRESENT` and take
 reports it. Never answer, dismiss or work around a dialog. cdctl never reads the title or class of another window,
 so it cannot tell you what an active window is; ask the person.
 
+## Working by screen
+
+Say what you want, not which keys to press. Each of these needs the lease (see [Sharing the machine](#sharing-the-machine)):
+
+```sh
+cdctl game launch --token TOKEN --json                # through Steam; started: false if already open
+cdctl game continue --token TOKEN --json              # title screen to the world; about a minute
+cdctl menu open map --token TOKEN --json              # also inventory, journal, skills, others, settings.input
+cdctl menu back --token TOKEN --json                  # one level, by the way known for this screen
+cdctl settings list --section input --json            # no lease and no game needed
+cdctl settings plan keyboard_mouse_preset=classic --json
+cdctl settings set keyboard_mouse_preset classic --apply --token TOKEN --json
+cdctl game quit --graceful --token TOKEN --json       # through the menu; never kills anything
+```
+
+- `before` and `after` are the screens, `changed` says whether anything was sent, and `verification.method` says how it was
+  checked: `visual_anchors`, `option_file` or `process`.
+- A menu already open answers `changed: false` and sends nothing, so asking twice is safe.
+- `settings set` answers with `data.real_changes`, what really differs in the file, and `next_steps` holds the command that
+  undoes it. Anything other than the planned change answers `VERIFY_FAILED`. Without `--apply` it sends nothing.
+- Starting a new game, picking a save and leaving by force are not offered at all.
+
+| Code | Meaning | What to do |
+| --- | --- | --- |
+| `UNKNOWN_SCREEN` | The screen is not one this profile knows. Nothing was sent | Observe and read the image. It may be loading |
+| `VERIFY_FAILED` | Something was sent once and the expected result did not come | Observe first. Do not repeat it blind: the game may only be slow, and a second key can undo the first |
+| `PRECONDITION_FAILED` | There is no known way from here, as the game menu from the title screen | Follow `next_steps` |
+| `UNSUPPORTED_BUILD` | No profile covers this game, or this keyboard preset | Use `cdctl input` and read the captures |
+
+This game stalls for seconds when a menu changes, and shows nothing new meanwhile. That is why these commands wait
+instead of sending again, and why you should too. After a timeout, look before you act.
+
 ## Sending input
 
-Input needs the lease (see [Sharing the machine](#sharing-the-machine)). Read the screen first, send one thing, then read
-the capture in the answer:
+Low-level input is for what the commands above do not cover. It needs the lease as well. Read the screen first, send one
+thing, then read the capture in the answer:
 
 ```sh
 cdctl observe --json                                            # look, and keep data.observation_id
@@ -109,7 +145,8 @@ Keys use X keysym names: `Escape`, `Return`, `space`, `e`, `F1`, `Shift_L`. A co
 observation that still holds, so a capture from before a change of resolution is refused rather than converted.
 
 A key sent proves nothing about what it did. `changed` is null, `verification.method` is `caller_required` and
-`input.result` is under `not_verified`, so read `artifacts[0]`. Wait for what you expect with `--settle-ms`, and observe
+`input.result` is under `not_verified`, so read `artifacts[0]`. Where a profile exists, `--expect-screen menu.map` waits for
+that screen instead and fails with `VERIFY_FAILED` if it does not come. Otherwise wait with `--settle-ms`, and observe
 again if the screen is still changing.
 
 Every answer below means the input did not happen, or stopped, with everything released:
@@ -164,7 +201,8 @@ you need to see the game.
 ## Sharing the machine
 
 The person who owns the machine may be playing, locally or through a stream. Do not close or restart the game,
-change the monitor, or stop anything else on the machine as part of observing it.
+change the monitor, or stop anything else on the machine as part of observing it. Entering the world lets the game
+autosave, as playing does, so continue a game only when that is what the person wants.
 
 Reading needs nothing. Acting needs the input lease, which another agent on the machine may hold:
 

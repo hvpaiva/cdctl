@@ -68,6 +68,27 @@ module Cdctl
       # The raw value. What it means in the menu belongs to a UI profile.
       def keyboard_mouse_preset = fact('_keyboardMousePresetOptionType', '_select')
 
+      # A value by element name, as a fact with where it came from.
+      def value_of(name, attribute) = fact(name, attribute)
+
+      # Every setting in the file by its path, without the serialization ids, which the game
+      # regenerates when it saves and which say nothing about any setting.
+      def settings
+        @entries.each_with_object({}) do |entry, found|
+          kept = entry.attributes.slice(*VALUE_ATTRIBUTES)
+          found[entry.path.join('/')] = kept unless kept.empty?
+        end
+      end
+
+      # What differs from another reading of the file, setting by setting.
+      def changes_since(earlier)
+        before = earlier.settings
+        after = settings
+        (before.keys | after.keys).filter_map do |path|
+          { setting: path, was: before[path], now: after[path] } unless before[path] == after[path]
+        end
+      end
+
       private
 
       # An element without its value is not an absent field: the file says something about it, in a

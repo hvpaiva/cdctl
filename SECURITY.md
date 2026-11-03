@@ -11,7 +11,9 @@ Report a vulnerability through a private security advisory on this repository.
 | The game's X server | Read: window properties, geometry, images, how many keys are down. Write, only under an `input` command: XTEST key, button and pointer events |
 | Xauthority files, for the display in use | Read, and the cookie goes only to that X server, if its socket belongs to the same user or to root |
 | The compositor's status command | Read, and nothing about any window but the game's is kept or reported |
-| The game's option file | Read |
+| The game's option file | Read. Settings change only through the game's menu |
+| Steam | Asked to start the game, only by `game launch` |
+| `$XDG_DATA_HOME/cdctl/profiles` | Read, if a machine has profiles of its own |
 | `$XDG_STATE_HOME/cdctl` | Write, with files readable by their owner alone |
 
 A lease token appears once, in the answer to `lease acquire`, and only its hash is stored. The lease stops programs that

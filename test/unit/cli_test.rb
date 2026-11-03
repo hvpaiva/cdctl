@@ -22,8 +22,8 @@ class CommandLayerTest < Minitest::Test
 
   def test_exit_status_follows_the_error_category
     {
-      %w[bogus] => 2, %w[schema --nope] => 2, %w[schema bogus] => 2, %w[input key m] => 3, %w[menu open map] => 4,
-      %w[schema menu.open] => 4, %w[schema] => 0
+      %w[bogus] => 2, %w[schema --nope] => 2, %w[schema bogus] => 2, %w[input key m] => 3, %w[menu open map] => 3,
+      %w[hud status] => 4, %w[schema hud.radar] => 4, %w[schema] => 0
     }.each do |argv, expected|
       assert_equal expected, @machine.run(*argv, '--json').first, argv.join(' ')
     end
@@ -157,8 +157,8 @@ class CommandLayerTest < Minitest::Test
   def test_planned_commands_are_hidden_from_help_but_answer
     _, out, = @machine.run('--help')
 
-    refute_match(/^\s+menu\s/, out)
-    assert_equal 'NOT_IMPLEMENTED', @machine.run_json('menu', 'open', 'map')[1][:error][:code]
+    refute_match(/^\s+hud\s/, out)
+    assert_equal 'NOT_IMPLEMENTED', @machine.run_json('hud', 'status')[1][:error][:code]
   end
 
   def test_unknown_commands_suggest_the_right_one
