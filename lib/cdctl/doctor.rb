@@ -9,6 +9,7 @@ module Cdctl
   # game that is closed is a normal state, not a problem.
   class Doctor
     MINIMUM_RUBY = Gem::Version.new('3.4')
+    WRAPPER_ONLY = 'Steam is starting the game, or it has just closed'
 
     def initialize(snapshot:, connection:, paths:)
       @snapshot = snapshot
@@ -103,7 +104,7 @@ module Cdctl
       return check('game_process', 'info', "running as PID #{found.pid}") if found
       return check('game_process', 'warn', 'several processes match the game') if @snapshot.scan.processes.size > 1
 
-      check('game_process', 'info', @snapshot.scan.launching ? 'Steam is starting the game' : 'the game is not running')
+      check('game_process', 'info', @snapshot.scan.launching ? WRAPPER_ONLY : 'the game is not running')
     end
 
     def x11

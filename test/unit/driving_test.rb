@@ -371,11 +371,77 @@ class GameLaunchTest < Minitest::Test
   end
 
   def test_steam_refusing_says_so
-    @machine.shell.on('steam', '-applaunch', status: 1, stderr: 'not today')
+    @machine.shell.on('steam', '-applaunch', status: 1)
     status, result, = launch
 
     assert_equal 3, status
-    assert_includes result[:error][:message], 'not today'
+    assert_includes result[:error][:message], 'exit status 1'
+    refute result[:changed]
+  end
+
+  def test_a_launch_already_on_its_way_is_not_started_again
+    @machine.add_process(800, comm: 'reaper', argv: ['reaper', 'SteamLaunch', "AppId=#{Machine::APP_ID}"])
+    status, result, = launch('--timeout', '1')
+
+    assert_equal 1, status
+    assert_equal 'TIMEOUT', result[:error][:code]
+    refute result[:changed]
+    assert_empty result[:actions]
+    refute_includes @machine.shell.calls.map(&:first), 'steam'
+  end
+
+  # A game that has just closed leaves Steam's wrapper behind for a few seconds, exactly like one that
+  # is starting. When it goes and nothing takes its place, there is a game to start.
+  def test_a_launch_right_after_a_close_starts_once_the_wrapper_is_gone
+    steam_starts_the_game
+    @machine.add_process(800, comm: 'reaper', argv: ['reaper', 'SteamLaunch', "AppId=#{Machine::APP_ID}"])
+    Thread.new do
+      sleep(0.5)
+      FileUtils.rm_rf(File.join(@machine.proc_root, '800'))
+    end
+    status, result, = launch
+
+    assert_equal 0, status, result[:error]
+    assert result[:changed]
+    assert result[:data][:started]
+    assert_equal(1, @machine.shell.calls.count { it.first == 'steam' })
+  end
+
+  def test_several_processes_start_nothing_more
+    @machine.run_game
+    @machine.run_game(pid: 4243)
+    status, result, = launch
+
+    assert_equal 3, status
+    assert_equal 'TARGET_AMBIGUOUS', result[:error][:code]
+    refute_includes @machine.shell.calls.map(&:first), 'steam'
+  end
+
+  def test_a_signal_during_the_wait_still_says_the_game_was_started
+    @machine.shell.on('steam', '-applaunch', stdout: '')
+    Thread.new do
+      sleep(0.3)
+      Process.kill('TERM', Process.pid)
+    end
+    status, result, = launch
+
+    assert_equal 130, status
+    assert_equal 'INTERRUPTED', result[:error][:code]
+    assert result[:changed]
+    assert_equal 'launch', result[:actions].first[:type]
+  end
+
+  def test_a_launch_is_recorded_even_before_the_window_exists
+    @machine.shell.on('steam', '-applaunch') do
+      @machine.run_game
+      ''
+    end
+
+    assert_equal 0, launch('--wait', 'none').first
+    @machine.game_window(width: FakeGameUi::WIDTH, height: FakeGameUi::HEIGHT)
+    _, result, = @machine.run_json('status')
+
+    assert_equal 'known', result[:data][:resolution][:launch_display_mode][:status]
   end
 
   def test_with_no_steam_program_it_asks_the_desktop
@@ -391,14 +457,14 @@ class GameLaunchTest < Minitest::Test
     assert_includes @machine.shell.calls, ['xdg-open', "steam://rungameid/#{Machine::APP_ID}"]
   end
 
-  def test_a_slow_first_start_of_steam_is_not_a_failure
-    steam_starts = lambda do |_|
+  # With Steam closed this command stays running as Steam, which is no failure and must not be stopped.
+  def test_a_steam_that_stays_running_is_not_a_failure
+    @machine.shell.on('steam', '-applaunch', status: nil) do
       @machine.run_game
       @machine.game_window(width: FakeGameUi::WIDTH, height: FakeGameUi::HEIGHT)
       FakeGameUi.new(@machine, screen: 'title')
-      raise Cdctl::Shell::TimedOut, 'still there'
+      ''
     end
-    @machine.shell.on('steam', '-applaunch', &steam_starts)
 
     assert_equal 0, launch.first
   end

@@ -15,9 +15,22 @@ module Cdctl
     CHUNK = 1 << 16
     # A capture of the largest display a game runs on, with room to spare.
     MAX_OUTPUT = 256 * 1024 * 1024
+    # Nothing started from here needs these, and whatever it starts in turn would inherit them.
+    WITHHELD = { 'CDCTL_LEASE_TOKEN' => nil }.freeze
 
     def initialize(env = {})
-      @env = env
+      @env = env.merge(WITHHELD)
+    end
+
+    # Starts a program meant to go on running, as Steam does when nothing else has started it yet, so
+    # no deadline applies and nothing here can kill it. A program that ends within the wait says how
+    # it went, and one still running has no answer yet, which is a nil exit status.
+    def start_detached(*argv, wait: DEFAULT_TIMEOUT)
+      pid = Process.spawn(@env, *argv, in: File::NULL, out: File::NULL, err: File::NULL, pgroup: true)
+      status = Process.detach(pid).join(wait)&.value
+      Output.new(stdout: '', stderr: '', exit_status: status&.exitstatus)
+    rescue Errno::ENOENT, Errno::EACCES => e
+      raise NotAvailable, "#{argv.first}: #{e.message.sub(/ - .*\z/m, '')}"
     end
 
     def run(*argv, timeout: DEFAULT_TIMEOUT)

@@ -106,7 +106,7 @@ module Cdctl
       return process.to_h.merge(state: 'running') if process
       return { state: 'ambiguous', candidates: scan.processes.map(&:pid) } if scan.processes.size > 1
 
-      { state: scan.launching ? 'starting' : 'not_running' }
+      { state: scan.launching ? 'starting_or_closing' : 'not_running' }
     end
 
     def window_report

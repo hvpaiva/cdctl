@@ -208,7 +208,7 @@
           "type": "object",
           "required": ["state"],
           "properties": {
-            "state": { "enum": ["running", "starting", "not_running", "ambiguous", "unknown", "unsupported"] },
+            "state": { "enum": ["running", "starting_or_closing", "not_running", "ambiguous", "unknown", "unsupported"] },
             "reason": { "type": "string" },
             "pid": { "type": "integer" },
             "display": { "type": ["string", "null"] },

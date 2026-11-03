@@ -44,11 +44,22 @@ module Cdctl
           snapshot = observer.snapshot
           next already_running(invocation, snapshot) if snapshot.process
 
+          refuse_unclear(snapshot)
           snapshot.installation or raise Error.new('the game is not installed', code: 'GAME_NOT_INSTALLED')
           Lease.for(runtime).verify!(token_from(runtime, opts))
-          start(runtime, snapshot)
+          start(runtime, snapshot) unless snapshot.scan&.launching
           await(invocation, runtime, opts[:wait], limit)
         end
+      end
+
+      # A second launch on top of processes nobody can tell apart would only add another.
+      def refuse_unclear(snapshot)
+        scan = snapshot.scan
+        raise Error.new(scan.problem, code: 'PRECONDITION_FAILED') if scan&.problem
+        return unless scan && scan.processes.size > 1
+
+        raise Error.new("#{scan.processes.size} processes match the game, so nothing was started",
+                        code: 'TARGET_AMBIGUOUS')
       end
 
       def whole(text)
@@ -66,20 +77,21 @@ module Cdctl
 
       def start(runtime, snapshot)
         output = run_steam(runtime)
-        unless output.success?
-          raise Error.new("Steam refused the launch: #{output.stderr.strip}", code: 'PRECONDITION_FAILED')
+        if output.exit_status&.positive?
+          raise Error.new("Steam refused the launch, with exit status #{output.exit_status}",
+                          code: 'PRECONDITION_FAILED')
         end
 
+        @started = true
         @display_at_launch = snapshot.resolution[:display_mode]
       end
 
+      # With Steam closed this command stays running as Steam itself, so it is left to run: stopping
+      # it would close Steam. The wait below is what proves the game started.
       def run_steam(runtime)
-        runtime.shell.run('steam', '-applaunch', Game::APP_ID.to_s)
+        runtime.shell.start_detached('steam', '-applaunch', Game::APP_ID.to_s)
       rescue Shell::NotAvailable
-        runtime.shell.run('xdg-open', "steam://rungameid/#{Game::APP_ID}")
-      rescue Shell::TimedOut
-        # A first Steam start stays in the foreground. It started, and the wait below is what proves it.
-        Shell::Output.new(stdout: '', stderr: '', exit_status: 0)
+        runtime.shell.start_detached('xdg-open', "steam://rungameid/#{Game::APP_ID}")
       end
 
       def await(invocation, runtime, wait, limit)
@@ -87,21 +99,27 @@ module Cdctl
         loop do
           found = Observer.open(runtime) { look(runtime, it, wait) }
           return done(invocation, found) if found[:done]
+          raise timed_out(wait, limit, found) if now > deadline
 
-          if now > deadline
-            raise Error.new("the game did not reach #{wait} in #{limit} seconds", code: 'TIMEOUT', changed: true,
-                                                                                  actions: launched,
-                                                                                  data: found[:state],
-                                                                                  next_steps: ['Run cdctl status.'])
-          end
           sleep(POLL)
         end
+      end
+
+      def so_far = { changed: @started == true, actions: launched, next_steps: ['Run cdctl status.'] }
+
+      def timed_out(wait, limit, found)
+        Error.new("the game did not reach #{wait} in #{limit} seconds", code: 'TIMEOUT', changed: @started == true,
+                                                                        actions: launched, data: found[:state],
+                                                                        next_steps: ['Run cdctl status.'])
       end
 
       def look(runtime, observer, wait)
         snapshot = observer.snapshot
         record_launch(observer, snapshot)
-        return { state: { process: false } } unless snapshot.process
+        unless snapshot.process
+          start_when_clear(runtime, snapshot)
+          return { state: { process: false } }
+        end
         return { done: true, snapshot: } if wait == 'none'
         return { state: { process: true, window: false } } unless snapshot.window
         return { done: true, snapshot: } if wait == 'window'
@@ -112,6 +130,13 @@ module Cdctl
         { state: { process: true, window: true, screen: match.to_h } }
       end
 
+      # Steam's wrapper with no game is a game on its way up, or one that has just closed, which look
+      # the same. If it goes away and nothing takes its place, it was the second, and this is the moment.
+      def start_when_clear(runtime, snapshot)
+        scan = snapshot.scan
+        start(runtime, snapshot) unless @started || scan&.launching || scan&.problem
+      end
+
       def record_launch(observer, snapshot)
         observer.note_launch(snapshot.process, @display_at_launch) if snapshot.process && @display_at_launch
       end
@@ -120,15 +145,16 @@ module Cdctl
         snapshot = found[:snapshot]
         screen = found[:screen]&.value
         invocation.success(
-          data: { started: true, launch_display_mode: @display_at_launch, window: snapshot.window&.hex_id }.compact,
-          target: snapshot.target, changed: true, actions: launched, before: { process: 'closed' },
+          data: { started: @started == true, launch_display_mode: @display_at_launch,
+                  window: snapshot.window&.hex_id }.compact,
+          target: snapshot.target, changed: @started == true, actions: launched, before: { process: 'closed' },
           after: { process: snapshot.process.pid, screen: screen&.fetch(:name, nil) }.compact,
           verification: { method: screen ? 'visual_anchors' : 'process',
                           observed: { pid: snapshot.process.pid, screen: }.compact }
         )
       end
 
-      def launched = [{ type: 'launch', through: 'steam', app_id: Game::APP_ID }]
+      def launched = @started ? [{ type: 'launch', through: 'steam', app_id: Game::APP_ID }] : []
 
       def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
