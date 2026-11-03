@@ -1,0 +1,180 @@
+# ruby/setup-ruby reads the Ruby version from mise.toml unless a job passes ruby-version. Jobs call
+# the rake tasks a contributor runs through "bundle exec rake check", except the steps that need the
+# pull request or another operating system.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  # edited, labeled and unlabeled rerun the commits job when the title, the body or the
+  # skip-changelog label changes. Every other job reruns too: a skipped job would count as a
+  # passing required check.
+  pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+  # Runs only the audit job, so a new advisory surfaces without waiting for a push.
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+# The event name keeps the weekly audit from cancelling a run on main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          bundler-cache: true
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.9.12
+          install_args: typos zizmor
+      - run: bundle exec rubocop
+      - run: bundle exec rake lint:spelling
+      # The token turns on zizmor's audits that query GitHub.
+      - run: bundle exec rake lint:workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  commits:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The pull request head, not the merge commit GitHub creates, so the range holds only the
+      # contributor's commits. fetch-depth 0 brings the base branch as origin/BASE.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          bundler-cache: true
+      # The title and body reach the script as files written from environment variables, never
+      # through template expansion inside the script.
+      - name: Check commit messages and the pull request title and body
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n' "$PR_TITLE" > "$RUNNER_TEMP/pr-title"
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body"
+          bundle exec ruby bin/lint-commits "origin/$BASE_REF..HEAD" \
+            --title "$RUNNER_TEMP/pr-title" --body "$RUNNER_TEMP/pr-body"
+      - name: Require a CHANGELOG.md line for changes under lib/ or exe/
+        if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          SKIP_CHANGELOG: ${{ contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+        run: |
+          changed=$(git diff --name-only "origin/$BASE_REF...HEAD") || exit 1
+          if ! grep -qE '^(lib|exe)/' <<< "$changed"; then
+            echo "No change under lib/ or exe/; no CHANGELOG.md line needed."
+          elif grep -qx 'CHANGELOG.md' <<< "$changed"; then
+            echo "CHANGELOG.md changed."
+          elif [ "$SKIP_CHANGELOG" = true ]; then
+            echo "CHANGELOG.md unchanged; the skip-changelog label allows it."
+          else
+            echo "::error::This pull request changes lib/ or exe/ without a CHANGELOG.md line."
+            exit 1
+          fi
+
+  # 3.4 is the oldest Ruby the gemspec supports. CDCTL_REQUIRE_XVFB turns a missing X server into a
+  # failure instead of a skip, so the X11 client always meets a real server here.
+  test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ['3.4', '4.0']
+    env:
+      CDCTL_REQUIRE_XVFB: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      - run: bundle exec rake test
+
+  coverage:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          bundler-cache: true
+      - run: bundle exec rake test:cov
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage
+          path: coverage/
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          bundler-cache: true
+      - run: bundle exec rake audit
+
+  package:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          bundler-cache: true
+      - run: bundle exec rake package:check
+
+  # The game also runs on systems the observation drivers do not cover yet. There, cdctl must still
+  # start, discover what it can and answer in its contract instead of crashing.
+  other-platforms:
+    if: github.event_name != 'schedule'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          bundler-cache: true
+      - run: bundle exec ruby exe/cdctl version
+      - run: bundle exec ruby exe/cdctl status --json
+      - run: bundle exec ruby exe/cdctl capabilities --json
+      - run: bundle exec ruby exe/cdctl schema status --json
