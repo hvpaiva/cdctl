@@ -48,6 +48,7 @@ class MenuOpenTest < Minitest::Test
     assert_equal %w[world menu.map], [result[:before][:screen], result[:after][:screen]]
     assert_equal %w[visual_anchors menu.map], result[:verification].values_at(:method, :expected)
     assert_equal 'menu.map', @ui.screen
+    refute_includes result[:not_verified], 'game.screen'
     assert_valid 'menu.open', result
     assert_all_released
   end
@@ -88,6 +89,79 @@ class MenuOpenTest < Minitest::Test
     assert_nil result[:changed]
   end
 
+  # A frame in the middle of a transition can match by chance, and it is gone by the next look.
+  def test_one_frame_that_matches_is_not_an_arrival
+    start
+    @ui.deaf = true
+    @x.on_fake_input = lambda do |type, _|
+      next unless type == KEY_PRESS
+
+      @ui.show('menu.map')
+      @x.after_image = lambda do |_window|
+        @ui.show('world')
+        @x.after_image = nil
+      end
+    end
+    status, result, = command('menu', 'open', 'map', '--timeout', '1')
+
+    assert_equal 1, status
+    assert_equal 'VERIFY_FAILED', result[:error][:code]
+    assert_equal 1, presses('m'.ord)
+  end
+
+  # The game can stall for longer than a caller waits, so its key may still be on its way.
+  def test_after_no_answer_the_next_command_does_not_send_again_at_once
+    start
+    @ui.deaf = true
+    command('menu', 'open', 'map', '--timeout', '1')
+    status, result, = command('menu', 'open', 'map', '--timeout', '1')
+
+    assert_equal 3, status
+    assert_equal 'PRECONDITION_FAILED', result[:error][:code]
+    assert_operator result[:error][:details][:retry_after_seconds], :>, 0
+    assert_equal 1, presses('m'.ord)
+  end
+
+  def test_the_screen_having_moved_ends_that_wait
+    start
+    @ui.deaf = true
+    command('menu', 'open', 'map', '--timeout', '1')
+    @ui.deaf = false
+    @ui.show('menu.inventory')
+    status, result, = command('menu', 'open', 'journal')
+
+    assert_equal 0, status
+    assert_equal 'menu.journal', result[:after][:screen]
+  end
+
+  def test_that_wait_does_not_last_forever
+    start
+    @ui.deaf = true
+    command('menu', 'open', 'map', '--timeout', '1')
+    @ui.deaf = false
+    path = File.join(Cdctl::Paths.new(@machine.env).input_dir, Cdctl::Driving::Unanswered::FILE)
+    record = JSON.parse(File.read(path))
+    File.write(path, JSON.generate(record.merge('at' => (Time.now - 60).iso8601(3))))
+
+    assert_equal 0, command('menu', 'open', 'map').first
+    refute_path_exists path
+  end
+
+  def test_a_screen_that_will_not_read_answers_that_the_target_changed
+    start
+    @x.on_fake_input = lambda do |type, _|
+      @x.refuse_images = true if type == 3
+    end
+    status, result, = command('menu', 'open', 'map', '--timeout', '1')
+
+    assert_equal 3, status
+    assert_equal 'TARGET_CHANGED', result[:error][:code]
+    assert_equal 1, result[:actions].size
+    assert_nil result[:changed]
+  ensure
+    @x.refuse_images = false
+  end
+
   def test_tabs_are_reached_by_clicking_them
     start(screen: 'menu.map')
     status, result, = command('menu', 'open', 'inventory')
@@ -115,6 +189,118 @@ class MenuOpenTest < Minitest::Test
     motion = @x.fake_inputs.find { it.first == 6 }
 
     assert_equal [x, y], motion.last(2)
+  end
+
+  # A tab says which menu is open and nothing about what its list holds, so the entry has to be seen.
+  def test_an_entry_that_is_not_there_is_not_clicked
+    start(screen: 'menu.others')
+    @ui.hidden = ['others.settings.label']
+    @ui.redraw
+    status, result, = command('menu', 'open', 'settings.video', '--timeout', '1')
+
+    assert_equal 3, status
+    assert_equal 'UNKNOWN_SCREEN', result[:error][:code]
+    assert_includes result[:error][:message], 'its input was not sent'
+    assert_nothing_sent
+  end
+
+  # Measured on the real game: a list draws well after its tab is recognized, and a click that comes
+  # too early does nothing. So the click waits for the list, and then a moment more.
+  def test_a_list_that_draws_after_its_tab_is_waited_for
+    start(screen: 'menu.map')
+    @ui.list_lag = 1.3
+    status, result, = command('menu', 'open', 'settings.video', '--timeout', '3')
+
+    assert_equal 0, status
+    assert_equal %w[menu.tab.others others.settings], sent_names(result)
+    assert_equal 'settings.video', @ui.screen
+  end
+
+  # A frame in the middle of a transition can match by chance, so it takes two looks in a row.
+  def test_an_entry_seen_in_one_frame_only_is_not_clicked
+    start(screen: 'menu.others')
+    looks = 0
+    original = Cdctl::Driving::Navigator.instance_method(:seen?)
+    Cdctl::Driving::Navigator.define_method(:seen?) { |_anchors| (looks += 1) == 2 }
+    status, result, = command('menu', 'open', 'settings.video', '--timeout', '1')
+
+    assert_equal 3, status
+    assert_equal 'UNKNOWN_SCREEN', result[:error][:code]
+    assert_nothing_sent
+  ensure
+    Cdctl::Driving::Navigator.define_method(:seen?, original)
+  end
+
+  def test_losing_the_focus_while_waiting_for_a_list_sends_nothing
+    start(screen: 'menu.others')
+    @ui.hidden = ['others.settings.label']
+    @ui.redraw
+    Thread.new do
+      sleep(0.3)
+      @x.focus = 0
+    end
+    status, result, = command('menu', 'open', 'settings.video', '--timeout', '3')
+
+    assert_equal 3, status
+    assert_equal 'FOCUS_LOST', result[:error][:code]
+    assert_nothing_sent
+  end
+
+  # An entry that is missing says so soon, whatever --timeout allows for a slow menu.
+  def test_a_long_timeout_does_not_lengthen_the_wait_for_an_entry
+    start(screen: 'menu.others')
+    @ui.hidden = ['others.settings.label']
+    @ui.redraw
+    original = Cdctl::Driving::Navigator::STEP_TIMEOUT
+    Cdctl::Driving::Navigator.send(:remove_const, :STEP_TIMEOUT)
+    Cdctl::Driving::Navigator.const_set(:STEP_TIMEOUT, 0.3)
+    began = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    status, result, = command('menu', 'open', 'settings.video', '--timeout', '5')
+
+    assert_equal 3, status
+    assert_equal 'UNKNOWN_SCREEN', result[:error][:code]
+    assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - began, :<, 3
+  ensure
+    Cdctl::Driving::Navigator.send(:remove_const, :STEP_TIMEOUT)
+    Cdctl::Driving::Navigator.const_set(:STEP_TIMEOUT, original)
+  end
+
+  def test_a_release_left_by_an_earlier_command_counts_as_a_change
+    start(screen: 'menu.map')
+    journal = Cdctl::Input::Journal.new(Cdctl::Paths.new(@machine.env).input_dir)
+    journal.write(held: [{ kind: 'key', code: 40 }], owner: { pid: 999_999, start_ticks: 1 })
+    status, result, = command('menu', 'open', 'map')
+
+    assert_equal 0, status
+    assert result[:changed]
+    assert_equal(['release'], result[:actions].map { it[:type] })
+    assert_equal 0, result[:data][:steps]
+  end
+
+  def test_a_capture_that_cannot_be_taken_does_not_undo_the_answer
+    start
+    @x.on_fake_input = lambda do |type, _|
+      next unless type == 3
+
+      @ui.show('menu.map')
+      @machine.hyprland(width: FakeGameUi::WIDTH, height: FakeGameUi::HEIGHT, layers: {
+                          '3' => [{ 'namespace' => 'polkit-agent', 'x' => 0, 'y' => 0, 'w' => 50, 'h' => 30 }]
+                        })
+    end
+    original = Cdctl::Driving::Navigator.instance_method(:wait_for)
+    machine = @machine
+    Cdctl::Driving::Navigator.define_method(:wait_for) do |names, timeout: 20|
+      original.bind_call(self, names, timeout:)
+    end
+    status, result, = command('menu', 'open', 'map')
+
+    assert_equal 0, status, machine.class.name
+    assert_empty result[:artifacts]
+    assert_nil result[:verification][:screenshot]
+    assert_includes result[:not_verified], 'game.active_resolution'
+    refute_includes result[:not_verified], 'game.screen'
+  ensure
+    Cdctl::Driving::Navigator.define_method(:wait_for, original)
   end
 
   def test_from_the_title_settings_can_be_reached
@@ -561,7 +747,7 @@ class GameContinueTest < Minitest::Test
     @ui.instance_variable_get(:@frames).clear
     @ui.define_singleton_method(:visible_anchors) { %w[title.copyright title.settings_label] }
     @ui.redraw
-    status, result, = command('game', 'continue')
+    status, result, = command('game', 'continue', '--timeout', '1')
 
     assert_equal 3, status
     assert_equal 'UNKNOWN_SCREEN', result[:error][:code]
@@ -612,6 +798,48 @@ class GameQuitTest < Minitest::Test
     refute result[:changed]
     refute result[:data][:sent]
     assert_nothing_sent
+  end
+
+  def test_a_game_still_starting_is_not_called_closed
+    start
+    FileUtils.rm_rf(File.join(@machine.proc_root, '4242'))
+    @machine.add_process(800, comm: 'reaper', argv: ['reaper', 'SteamLaunch', "AppId=#{Machine::APP_ID}"])
+    status, result, = command('game', 'quit')
+
+    assert_equal 3, status
+    assert_equal 'PRECONDITION_FAILED', result[:error][:code]
+    assert_nothing_sent
+  end
+
+  # The game can end while the confirming key is still down, which looks like a lost target.
+  def test_a_game_that_ends_during_the_confirmation_has_done_what_was_asked
+    start(screen: 'menu.others')
+    @ui.exit_on_press = true
+    status, result, = command('game', 'quit')
+
+    assert_equal 0, status
+    assert_equal({ process: 'closed' }, result[:after])
+    assert_all_released
+  end
+
+  def test_a_game_that_ends_during_the_hold_on_the_title_has_done_what_was_asked
+    start(screen: 'title')
+    @ui.exit_on_press = true
+    status, = command('game', 'quit')
+
+    assert_equal 0, status
+    assert_all_released
+  end
+
+  def test_an_exit_entry_that_is_not_there_is_not_clicked
+    start(screen: 'menu.others')
+    @ui.hidden = ['others.quit.label']
+    @ui.redraw
+    status, result, = command('game', 'quit', '--timeout', '1')
+
+    assert_equal 3, status
+    assert_equal 'UNKNOWN_SCREEN', result[:error][:code]
+    assert_equal 0, clicks
   end
 
   def test_a_game_that_does_not_end_is_a_timeout_and_nothing_is_killed
@@ -770,6 +998,137 @@ class SettingsCommandsTest < Minitest::Test
                  sent_names(result)
   end
 
+  # The second key confirms a dialog. Without the dialog it would mean something else.
+  def test_a_dialog_that_does_not_open_gets_no_confirmation
+    start(screen: 'settings.input')
+    @ui.define_singleton_method(:apply_confirm) { nil }
+    status, result, = set('keyboard_mouse_preset', 'classic', '--apply', '--timeout', '1')
+
+    assert_equal 1, status
+    assert_equal 'VERIFY_FAILED', result[:error][:code]
+    assert_equal 1, presses(0x20)
+    assert_equal 'standard', @ui.preset
+  end
+
+  def test_the_right_element_with_the_wrong_value_is_a_failure
+    start
+    @ui.on_apply = lambda do
+      @machine.write_options(FakeGameUi.options_text('standard').sub('_keyboardMousePresetOptionType" _select="A"',
+                                                                     '_keyboardMousePresetOptionType" _select="B"'),
+                             modified_at: Time.now + 1)
+    end
+    status, result, = set('keyboard_mouse_preset', 'classic', '--apply')
+
+    assert_equal 1, status
+    assert_equal 'VERIFY_FAILED', result[:error][:code]
+    assert_equal 1, result[:data][:real_changes].size
+  end
+
+  # The game was seen to take a moment over its writes, and a second one can differ from the first.
+  def test_a_second_write_is_what_gets_compared
+    start
+    @ui.on_apply = lambda do
+      Thread.new do
+        sleep(0.35)
+        @machine.write_options(FakeGameUi.options_text('classic').sub('_value="90"', '_value="120"'),
+                               modified_at: Time.now + 2)
+      end
+    end
+    status, result, = set('keyboard_mouse_preset', 'classic', '--apply')
+
+    assert_equal 1, status
+    assert_equal 'VERIFY_FAILED', result[:error][:code]
+    assert_equal 2, result[:data][:real_changes].size
+  end
+
+  def test_a_file_caught_in_the_middle_of_a_write_is_not_the_answer_yet
+    start
+    @ui.on_apply = lambda do
+      @machine.write_options('', modified_at: Time.now + 1)
+      Thread.new do
+        sleep(0.4)
+        @machine.write_options(FakeGameUi.options_text('classic'), modified_at: Time.now + 2)
+      end
+    end
+    status, result, = set('keyboard_mouse_preset', 'classic', '--apply')
+
+    assert_equal 0, status
+    assert_equal 1, result[:data][:real_changes].size
+  end
+
+  def test_a_change_applied_and_proved_says_so_even_if_something_goes_wrong_next
+    start
+    @ui.on_apply = lambda do
+      Thread.new do
+        sleep(0.5)
+        @x.focus = 0
+      end
+    end
+    status, result, = set('keyboard_mouse_preset', 'classic', '--apply')
+
+    assert_equal 3, status
+    assert_equal 'FOCUS_LOST', result[:error][:code]
+    assert result[:data][:applied]
+    assert_equal 1, result[:data][:real_changes].size
+    assert_includes result[:next_steps].join, 'keyboard_mouse_preset standard'
+  end
+
+  # The key was seen by the game or it was not, and neither answer would be honest.
+  def test_a_failure_during_the_confirmation_says_nothing_is_known
+    start
+    @ui.on_apply = -> { @x.focus = 0 }
+    status, result, = set('keyboard_mouse_preset', 'classic', '--apply')
+
+    assert_equal 3, status
+    assert_equal 'FOCUS_LOST', result[:error][:code]
+    assert_nil result[:data][:applied]
+    assert result[:data][:confirmation_sent]
+    assert_includes result[:next_steps].join, 'settings get'
+  end
+
+  def test_a_row_left_changed_and_not_applied_is_said_to_be
+    start(screen: 'settings.input')
+    @x.on_fake_input = lambda do |type, detail|
+      @ui.send(:react, type, detail)
+      @x.focus = 0 if type == 5
+    end
+    status, result, = set('keyboard_mouse_preset', 'classic', '--apply')
+
+    assert_equal 3, status
+    assert_equal 'FOCUS_LOST', result[:error][:code]
+    assert result[:data][:row_left_pending]
+    refute result[:data][:applied]
+    assert_includes result[:next_steps].join, 'nothing applied'
+    assert_equal 'standard', @ui.preset
+  end
+
+  # A scrolled list puts another row at the same point, with the same value on it.
+  def test_a_row_that_is_not_there_is_not_clicked
+    start(screen: 'settings.input')
+    @ui.hidden = ['settings.input.keyboard.row']
+    @ui.redraw
+    status, result, = set('keyboard_mouse_preset', 'classic', '--apply', '--timeout', '1')
+
+    assert_equal 3, status
+    assert_equal 'UNKNOWN_SCREEN', result[:error][:code]
+    assert_equal 0, clicks
+  end
+
+  def test_a_row_that_draws_late_is_waited_for
+    start(screen: 'settings.input')
+    @ui.hidden = ['settings.input.keyboard.row']
+    @ui.redraw
+    Thread.new do
+      sleep(0.4)
+      @ui.hidden = []
+      @ui.redraw
+    end
+    status, result, = set('keyboard_mouse_preset', 'classic', '--apply')
+
+    assert_equal 0, status, result[:error]
+    assert_equal 'classic', @ui.preset
+  end
+
   def test_a_value_already_set_sends_nothing
     start
     status, result, = set('keyboard_mouse_preset', 'standard', '--apply')
@@ -869,6 +1228,7 @@ class InputExpectScreenTest < Minitest::Test
     assert_equal 'menu.map', result[:after][:screen]
     assert_equal 'world', result[:before][:screen]
     refute_includes result[:not_verified], 'input.result'
+    refute_includes result[:not_verified], 'game.screen'
     assert_empty result[:next_steps]
   end
 
@@ -888,12 +1248,27 @@ class InputExpectScreenTest < Minitest::Test
     Cdctl::Driving::Navigator.const_set(:STEP_TIMEOUT, original)
   end
 
-  def test_a_screen_the_profile_does_not_know_is_refused
+  def test_a_screen_the_profile_does_not_know_costs_no_key
     start
     status, result, = command('input', 'key', 'h', '--expect-screen', 'moon')
 
     assert_equal 4, status
     assert_equal 'UNSUPPORTED_BUILD', result[:error][:code]
+    assert_nothing_sent
+  end
+
+  # The screen it started on proves nothing: a game in a stall shows that one for a while yet.
+  def test_expecting_the_screen_already_there_proves_nothing
+    start
+    @ui.deaf = true
+    status, result, = command('input', 'key', 'm', '--expect-screen', 'world')
+
+    assert_equal 0, status
+    assert_nil result[:changed]
+    assert_equal 'caller_required', result[:verification][:method]
+    assert_includes result[:not_verified], 'input.result'
+    assert_includes result[:not_verified], 'game.screen'
+    refute_empty result[:next_steps]
   end
 
   def test_with_no_profile_it_cannot_expect_anything

@@ -5,6 +5,41 @@ require 'test_helper'
 class OptionsFileTest < Minitest::Test
   def file(text) = Cdctl::Game::OptionsFile.new('/x.xml', text, Time.at(0))
 
+  def changes(earlier, later) = file(later).changes_since(file(earlier))
+
+  def test_ids_the_game_regenerates_are_no_change
+    from = '<A Name="r" IdBase="1"><B ItemID="5" _value="2"/></A>'
+    to = '<A Name="r" IdBase="9"><B ItemID="7" _value="2"/></A>'
+
+    assert_empty changes(from, to)
+  end
+
+  def test_an_attribute_that_is_not_a_value_is_still_a_change
+    from = '<A Name="r" _selectPreset="Custom"><B Name="b" _value="2"/></A>'
+    to = '<A Name="r" _selectPreset="High"><B Name="b" _value="2"/></A>'
+
+    assert_equal [{ setting: 'r', was: { '_selectPreset' => 'Custom' }, now: { '_selectPreset' => 'High' } }],
+                 changes(from, to)
+  end
+
+  def test_siblings_sharing_a_path_are_told_apart
+    from = '<A Name="r"><B _value="1"/><B _value="2"/></A>'
+    to = '<A Name="r"><B _value="9"/><B _value="2"/></A>'
+
+    assert_equal [{ setting: 'r/B', was: { '_value' => '1' }, now: { '_value' => '9' } }], changes(from, to)
+
+    to = '<A Name="r"><B _value="1"/><B _value="9"/></A>'
+
+    assert_equal [{ setting: 'r/B#1', was: { '_value' => '2' }, now: { '_value' => '9' } }], changes(from, to)
+  end
+
+  def test_an_element_that_goes_away_is_a_change
+    from = '<A Name="r"><B Name="b" _select="A"/><C Name="c" _value="1"/></A>'
+    to = '<A Name="r"><C Name="c" _value="1"/></A>'
+
+    assert_equal [{ setting: 'r/b', was: { '_select' => 'A' }, now: nil }], changes(from, to)
+  end
+
   def test_a_stored_resolution_is_read
     assert_equal({ width: 2560, height: 1440 }, file(OptionFiles.sample(viewport: '2560 1440')).viewport_size.value)
   end

@@ -21,6 +21,7 @@ module Cdctl
       MAX_BYTES = 4 * 1024 * 1024
       SOURCE = 'option_file'
       VALUE_ATTRIBUTES = %w[_value _select].freeze
+      IDENTIFYING_ATTRIBUTES = %w[Name IdBase ItemID].freeze
 
       attr_reader :path, :modified_at
 
@@ -71,12 +72,17 @@ module Cdctl
       # A value by element name, as a fact with where it came from.
       def value_of(name, attribute) = fact(name, attribute)
 
-      # Every setting in the file by its path, without the serialization ids, which the game
-      # regenerates when it saves and which say nothing about any setting.
+      # Everything in the file by its path, leaving out only the serialization ids, which the game
+      # regenerates when it saves and which say nothing about any setting. Anything else counts, since
+      # a change nobody asked for is what a comparison is for. Siblings without a name share a path,
+      # so their order tells them apart.
       def settings
+        seen = Hash.new(0)
         @entries.each_with_object({}) do |entry, found|
-          kept = entry.attributes.slice(*VALUE_ATTRIBUTES)
-          found[entry.path.join('/')] = kept unless kept.empty?
+          path = entry.path.join('/')
+          kept = entry.attributes.except(*IDENTIFYING_ATTRIBUTES)
+          found[seen[path].zero? ? path : "#{path}##{seen[path]}"] = kept unless kept.empty?
+          seen[path] += 1
         end
       end
 

@@ -18,13 +18,14 @@ class FakeGameUi
   BUTTON_PRESS = 4
   BACKGROUND = 16
   LONG_PRESS = 1.0
+  LIST_ACCEPTS_AFTER = 0.3
   SHIPPED = Cdctl::Recognition::Profile.all.first
   OPTION_FILE = <<~XML
     <EngineOptionSave><EngineOption Name="_option"><Group Name="_controlsOption">%<preset>s<Enum Name="_gamePadPresetOptionType" _select="A"/></Group><Scalar Name="_uiHudScale" _value="90"/><Scalar Name="_upscaleResolution" _select="67%%"/></EngineOption></EngineOptionSave>
   XML
   STANDARD_ELEMENT = '<Enum Name="_keyboardMousePresetOptionType" _select="A"/>'
 
-  attr_accessor :screen, :stall, :deaf, :opened_from, :preset, :on_apply
+  attr_accessor :screen, :stall, :deaf, :opened_from, :preset, :on_apply, :exit_on_press, :hidden, :list_lag
   attr_reader :machine
 
   def self.options_text(preset)
@@ -38,8 +39,10 @@ class FakeGameUi
     @opened_from = screen == 'title' ? :title : :world
     @proc_game = proc_game
     @stall = 0
+    @list_lag = 0
     @names = names
     @pending_preset = preset
+    @hidden = []
     @frames = {}
     write_profile
     @window = machine.x_server.windows.fetch(Machine::GAME_WINDOW)
@@ -47,16 +50,29 @@ class FakeGameUi
     redraw
   end
 
-  def redraw = @window.pixel = frame_bytes(visible_anchors)
+  def redraw = @window.pixel = frame_bytes(visible_anchors - hidden)
 
   def show(screen)
     @screen = screen
+    draw_the_list_late if screen == 'menu.others' && list_lag.positive?
     redraw
   end
 
   def anchor_names = SHIPPED.instance_variable_get(:@anchors).keys
 
   private
+
+  # On the real game the list of this menu draws well after its tab, and takes a moment more before
+  # a click does anything.
+  def draw_the_list_late
+    @list_at = now + list_lag
+    Thread.new do
+      sleep(list_lag)
+      redraw
+    end
+  end
+
+  def list_ready?(moment = 0) = @list_at.nil? || now >= @list_at + moment
 
   def names = anchor_names.each_with_index.to_h { |name, index| [name, index] }
 
@@ -90,6 +106,7 @@ class FakeGameUi
     case screen
     when 'title' then %w[title.copyright title.settings_label title.play.keys]
     when 'world' then %w[world.corner]
+    when 'menu.others' then ['menu.tab.others', *(%w[others.settings.label others.quit.label] if list_ready?)]
     when /\Amenu\.(.+)/ then ["menu.tab.#{Regexp.last_match(1)}"]
     when /\Asettings\.(.+)/ then settings_anchors(Regexp.last_match(1))
     when 'dialog.exit' then %w[dialog.exit.text dialog.exit.prompts menu.tab.others]
@@ -101,7 +118,7 @@ class FakeGameUi
   def settings_anchors(tab)
     list = ['settings.restore', "settings.tab.#{tab}"]
     list << 'menu.tab.others' if opened_from == :world
-    list << "settings.input.keyboard.#{@pending_preset}" if tab == 'input'
+    list += ['settings.input.keyboard.row', "settings.input.keyboard.#{@pending_preset}"] if tab == 'input'
     list
   end
 
@@ -141,14 +158,17 @@ class FakeGameUi
   def key_down(code)
     @pressed_at = now
     name = key_name(code)
+    return exit_game if exit_on_press && exiting_key?(name)
+
     apply_key(name)
   end
+
+  def exiting_key?(name) = (name == 'Escape' && screen == 'title') || (name == 'space' && screen == 'dialog.exit')
 
   def key_up(code)
     return if now - @pressed_at.to_f < LONG_PRESS
 
-    name = key_name(code)
-    exit_game if (name == 'Escape' && screen == 'title') || (name == 'space' && screen == 'dialog.exit')
+    exit_game if exiting_key?(key_name(code))
   end
 
   def apply_key(name)
@@ -190,6 +210,7 @@ class FakeGameUi
   def clicked(position)
     name = SHIPPED.points.keys.find { near?(position, SHIPPED.point(it, HEIGHT)) }
     return unless name
+    return if name.to_s.start_with?('others.') && !list_ready?(LIST_ACCEPTS_AFTER)
 
     case name.to_s
     when 'settings.input.keyboard.previous' then choose('classic')

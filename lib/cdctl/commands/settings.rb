@@ -187,6 +187,9 @@ module Cdctl
       NAME = 'settings set'
       VALUE_TIMEOUT = 10.0
       FILE_TIMEOUT = 15.0
+      # The game was seen to take a moment over its writes, so a file has to hold still this long.
+      FILE_QUIET = 1.0
+      UNCERTAIN = 'The confirmation was sent, so this may have been applied. Read the value with cdctl settings get.'
       POLL = 0.2
       DESCRIPTION = 'Reach the setting in the menu, change that one row, confirm the dialog once it is recognized, ' \
                     "and compare the option file with the plan. Any other difference answers VERIFY_FAILED.\n\n" \
@@ -246,18 +249,52 @@ module Cdctl
         navigator = turn.navigator
         eyes = eyes_for(observer, turn.snapshot, require_profile(turn.runtime, turn.snapshot))
         navigator.go_to(change.setting.fetch(:screen))
-        change_row(navigator, eyes, change)
-        report(turn, change, confirm_and_compare(navigator, change))
+        check_row(navigator, eyes, change)
+        changes = with_the_row_accounted_for(change) do
+          change_row(navigator, eyes, change)
+          confirm_and_compare(navigator, change)
+        end
+        back_on_the_screen(navigator, change, changes)
+        report(turn, change, changes)
+      end
+
+      # A list can scroll, and two rows can show the same value, so the row itself has to be where the
+      # point is before anything is clicked.
+      def check_row(navigator, eyes, change)
+        setting = change.setting
+        plan = change.plan
+        unless navigator.on_screen?([setting.fetch(:row)])
+          raise Error.new("the row of #{plan[:setting]} is not where this profile expects it, so nothing was changed",
+                          code: 'UNKNOWN_SCREEN', next_steps: ['Read the capture with cdctl observe.'])
+        end
+        return if eyes.sees?(setting.fetch(:values).fetch(plan[:from].to_sym).fetch(:anchor))
+
+        raise Error.new("the menu does not show #{plan[:from]}, which the option file says it should, so nothing " \
+                        'was changed', code: 'VERIFY_FAILED', next_steps: ['Read the capture with cdctl observe.'])
+      end
+
+      # Once the row moved, a failure can leave it showing a value that was never applied, and repeating
+      # the command would then not find what it expects. Once the confirmation went out, the game may
+      # have taken it or not, and only the file can say. The answer has to tell these apart.
+      def with_the_row_accounted_for(change)
+        @confirmation_sent = false
+        yield
+      rescue Error => e
+        raise if e.data
+
+        plan = change.plan
+        if @confirmation_sent
+          raise e.attach(data: plan.merge(applied: nil, confirmation_sent: true), next_steps: [UNCERTAIN])
+        end
+
+        raise e.attach(data: plan.merge(applied: false, row_left_pending: true),
+                       next_steps: ["The row may show #{plan[:to]} with nothing applied. Read the capture before " \
+                                    'anything else.'])
       end
 
       def change_row(navigator, eyes, change)
         setting = change.setting
         plan = change.plan
-        unless eyes.sees?(setting.fetch(:values).fetch(plan[:from].to_sym).fetch(:anchor))
-          raise Error.new("the menu does not show #{plan[:from]}, which the option file says it should, so nothing " \
-                          'was changed', code: 'VERIFY_FAILED', next_steps: ['Read the capture with cdctl observe.'])
-        end
-
         order = setting.fetch(:order)
         navigator.click(setting.fetch(order.index(plan[:to]) > order.index(plan[:from]) ? :next : :previous))
         wait_for_value(navigator, eyes, setting.fetch(:values).fetch(plan[:to].to_sym), plan)
@@ -282,55 +319,87 @@ module Cdctl
         navigator.send_key(confirm)
         navigator.wait_for([change.setting.fetch(:dialog)])
         navigator.settle
+        @confirmation_sent = true
         navigator.send_key(confirm)
         changes = await_file(change)
         compare(changes, change)
-        navigator.wait_for([change.setting.fetch(:screen)])
         changes
       end
 
-      # The file is the proof, and the game writes it some time after the dialog closes.
+      # The file is the proof, and the game writes it some time after the dialog closes, maybe more than
+      # once. Only what has stayed the same for a moment is compared. A file caught in the middle of being
+      # written, or not changed yet, is simply not the answer yet.
       def await_file(change)
-        earlier = change.options
         deadline = monotonic + FILE_TIMEOUT
+        seen = nil
+        since = monotonic
         loop do
-          current = Game::OptionsFile.read(earlier.path)
-          return current.changes_since(earlier) if current.modified_at > earlier.modified_at
+          changes = differences_now(change.options)
+          return changes if changes == seen && changes&.any? && monotonic - since >= FILE_QUIET
 
-          if monotonic > deadline
-            raise Error.new("the option file did not change after applying #{change.plan[:to]}",
-                            code: 'VERIFY_FAILED', next_steps: ['Read the capture.'])
+          unless changes == seen
+            seen = changes
+            since = monotonic
           end
+          raise file_did_not_settle(change) if monotonic > deadline
+
           sleep(POLL)
         end
-      rescue Game::OptionsFile::ParseError => e
-        raise Error.new("the option file cannot be read after the change: #{e.message}", code: 'VERIFY_FAILED')
+      end
+
+      def file_did_not_settle(change)
+        Error.new("the option file did not change after applying #{change.plan[:to]}, or did not stop changing",
+                  code: 'VERIFY_FAILED', next_steps: ['Read the capture.'])
+      end
+
+      def differences_now(earlier)
+        Game::OptionsFile.read(earlier.path).changes_since(earlier)
+      rescue Game::OptionsFile::ParseError
+        nil
       end
 
       def compare(changes, change)
-        element = "/#{change.setting[:option]}"
-        return if changes.size == 1 && changes.first[:setting].end_with?(element)
+        setting = change.setting
+        only = changes.one? ? changes.first : nil
+        return if only && only[:setting].end_with?("/#{setting[:option]}") &&
+                  only[:now]&.fetch(setting[:attribute], nil) == change.plan[:raw_to]
 
         raise Error.new("the real change is not the planned one: #{changes.size} setting(s) changed in the file",
                         code: 'VERIFY_FAILED', data: { plan: change.plan, real_changes: changes },
                         next_steps: ["To undo: #{change.plan[:restore]}"])
       end
 
+      # Past this point the change happened and was proved, and whatever goes wrong has to say so.
+      def back_on_the_screen(navigator, change, changes)
+        navigator.wait_for([change.setting.fetch(:screen)])
+      rescue Error => e
+        raise e.attach(data: change.plan.merge(applied: true, real_changes: changes),
+                       next_steps: ["The change was applied and proved. To undo: #{change.plan[:restore]}"])
+      end
+
       def report(turn, change, changes)
         plan = change.plan
         Observer.open(turn.runtime) do |later|
           fresh = later.snapshot
-          artifact = capture(later, turn.runtime, fresh, turn.invocation)
+          artifact = capture_if_possible(later, turn.runtime, fresh, turn.invocation)
           turn.invocation.success(
-            data: plan.merge(applied: true, needed: true, real_changes: changes, modals: fresh.modals,
-                             activity: turn.session.activity_report, steps: turn.navigator.steps_taken),
+            data: plan.merge(applied: true, needed: true, real_changes: changes, **sent_so_far(turn, fresh)),
             target: fresh.target || turn.snapshot.target, changed: true, actions: turn.session.sender.actions,
             before: { value: plan[:from] }, after: { value: plan[:to] },
-            verification: { method: 'option_file', screenshot: artifact[:path], expected: plan[:file_change],
-                            observed: changes },
-            artifacts: [artifact], not_verified: turn.session.not_verified, next_steps: ["To undo: #{plan[:restore]}"]
+            verification: proof(plan, artifact, changes), artifacts: [artifact].compact,
+            not_verified: (with_the_screen_known(notes_on(fresh, artifact)) + turn.session.not_verified).uniq,
+            next_steps: ["To undo: #{plan[:restore]}"]
           )
         end
+      end
+
+      def sent_so_far(turn, fresh)
+        { modals: fresh.modals, activity: turn.session.activity_report, steps: turn.navigator.steps_taken }
+      end
+
+      def proof(plan, artifact, changes)
+        { method: 'option_file', screenshot: artifact&.fetch(:path, nil), expected: plan[:file_change],
+          observed: changes }.compact
       end
 
       def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)

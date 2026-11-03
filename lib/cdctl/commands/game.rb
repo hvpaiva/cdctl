@@ -227,7 +227,12 @@ module Cdctl
 
       def perform(invocation, runtime, args, opts)
         scan = Observer.open(runtime, &:snapshot).scan
-        return closed_already(invocation) if scan && scan.processes.empty? && !scan.problem
+        if scan && scan.processes.empty? && !scan.problem
+          return closed_already(invocation) unless scan.launching
+
+          raise Error.new('the game is starting or has just closed, so there is nothing to close yet',
+                          code: 'PRECONDITION_FAILED', next_steps: ['Run cdctl status in a moment.'])
+        end
 
         super
       end
@@ -240,10 +245,11 @@ module Cdctl
       def drive(navigator, _args)
         before = navigator.settled_look
         if before&.name == 'title'
-          navigator.take_flow(:quit_from_title)
+          navigator.take_exit_flow(:quit_from_title)
         else
           navigator.go_to(navigator.quit_entry)
-          navigator.take_flow(:quit)
+          navigator.settle
+          navigator.take_exit_flow(:quit)
         end
         { before: }
       end

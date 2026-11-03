@@ -1,8 +1,11 @@
 # frozen_string_literal: true
 
+require 'json'
+require 'time'
 require_relative 'capture/frame'
 require_relative 'error'
 require_relative 'input/keys'
+require_relative 'private_files'
 require_relative 'recognition/profile'
 require_relative 'x11'
 
@@ -30,11 +33,63 @@ module Cdctl
 
         image = @connection.image(@window.id, 0, 0, @window.width, @window.height)
         Capture::Frame.new(width: @window.width, height: @window.height, layout:, pixels: image.data)
+      rescue X11::RequestError
+        raise Error.new('the game window can no longer be read, so it may have closed',
+                        code: 'TARGET_CHANGED', next_steps: ['Run cdctl status.'])
       end
 
       def look = @recognizer.recognize(frame)
 
-      def sees?(anchor) = @profile.anchor_named(anchor).matches?(frame)
+      def sees?(anchor, in_frame = frame) = @profile.anchor_named(anchor).matches?(in_frame)
+    end
+
+    # An input that got no answer in time may still be on its way, since the game can stall for longer
+    # than any caller wants to wait. Until the screen moves or this much time passes, sending again
+    # could undo it, so the next command is told to look first.
+    class Unanswered
+      FILE = 'unanswered.json'
+      HOLD_OFF_SECONDS = 30
+
+      def initialize(directory, clock: -> { Time.now })
+        @path = File.join(directory, FILE)
+        @directory = directory
+        @clock = clock
+      end
+
+      def note(screen, expected)
+        PrivateFiles.directory(@directory)
+        PrivateFiles.write(@path, JSON.generate(screen:, expected:, at: @clock.call.iso8601(3)))
+      rescue SystemCallError
+        nil
+      end
+
+      def clear
+        File.unlink(@path)
+      rescue SystemCallError
+        nil
+      end
+
+      def check!(screen)
+        record = read
+        return unless record
+        return clear unless record[:screen] == screen
+
+        left = (HOLD_OFF_SECONDS - (@clock.call - Time.iso8601(record[:at]))).ceil
+        return clear unless left.positive?
+
+        steps = ["Look with cdctl observe, and try again in #{left} seconds if the screen has not changed."]
+        raise Error.new("the last input from #{screen} got no answer yet and may still be on its way, so nothing was " \
+                        'sent', code: 'PRECONDITION_FAILED', details: { retry_after_seconds: left }, next_steps: steps)
+      end
+
+      private
+
+      def read
+        record = JSON.parse(File.read(@path), symbolize_names: true)
+        record.is_a?(Hash) && record[:at].is_a?(String) ? record : nil
+      rescue SystemCallError, JSON::ParserError, EncodingError
+        nil
+      end
     end
 
     class Navigator
@@ -51,14 +106,15 @@ module Cdctl
       # A screen draws before it accepts input: a click right after a menu appeared was seen to do
       # nothing on the real game, while the same click a moment later worked.
       ARRIVAL_SETTLE = 0.8
+      # After an exit is confirmed these are what success looks like from here.
+      GOING_AWAY = %w[TARGET_CHANGED FOCUS_LOST RESOLUTION_CHANGED].freeze
 
-      attr_reader :actions
-
-      def initialize(session:, eyes:, profile:, window:, step_timeout: STEP_TIMEOUT)
+      def initialize(session:, eyes:, profile:, window:, unanswered: nil, step_timeout: STEP_TIMEOUT)
         @session = session
         @eyes = eyes
         @profile = profile
         @window = window
+        @unanswered = unanswered
         @step_timeout = step_timeout
         @steps = 0
       end
@@ -85,6 +141,13 @@ module Cdctl
         nil
       end
 
+      # For a flow that ends the game: its window may go while the key that ends it is still down.
+      def take_exit_flow(name)
+        take_flow(name)
+      rescue Error => e
+        raise unless GOING_AWAY.include?(e.code) && !@session.sender.actions.empty?
+      end
+
       # What is on the screen once it holds still, or nil.
       def settled_look
         deadline = now + SETTLE_TIMEOUT
@@ -108,7 +171,7 @@ module Cdctl
 
         current = require_screen
         until current.name == target
-          take(next_step(current.name, target), target)
+          take(next_step(current.name, target), current.name, target)
           current = require_screen
         end
         current
@@ -119,7 +182,7 @@ module Cdctl
         edge = open_edges.find { it[:back] && it[:from].include?(current.name) }
         return current unless edge
 
-        take(edge, nil)
+        take(edge, current.name, nil)
       end
 
       # Waits for one of these screens. Losing the focus or seeing other input ends the wait, since
@@ -134,7 +197,7 @@ module Cdctl
           same = match && match.name == previous&.name ? same + 1 : 1
           previous = match
           return match if match && names.include?(match.name) && same >= SAME_LOOKS
-          raise timed_out(names, match) if now > deadline
+          raise timed_out(names, match, timeout) if now > deadline
 
           @session.sender.pause(POLL)
         end
@@ -162,14 +225,45 @@ module Cdctl
                               hold: CLICK_HOLD, description: { type: 'click', x:, y:, button: 'left', point: })
       end
 
+      # Whether one of these is on the screen, waiting for it if it has not drawn yet: a list was
+      # measured to draw about a second and a half after its tab. What has only just drawn gets the
+      # moment any new screen gets before it takes input.
+      def on_screen?(anchors)
+        return true if seen?(anchors)
+        return false unless appears?(anchors)
+
+        settle
+        true
+      end
+
       private
 
-      # The entry that a flow takes must be on the screen, or the key means something else.
-      def require_entry(flow)
-        expected = flow[:seen_any]
-        return if expected.nil? || expected.any? { @eyes.sees?(it) }
+      def seen?(anchors)
+        frame = @eyes.frame
+        anchors.any? { @eyes.sees?(it, frame) }
+      end
 
-        raise Error.new('the entry this expects is not on the screen, so nothing was sent',
+      # A longer --timeout is for the long way into the world, and says nothing about a list.
+      def appears?(anchors)
+        deadline = now + [@step_timeout, STEP_TIMEOUT].min
+        same = 0
+        loop do
+          @session.guard.during_hold!
+          same = seen?(anchors) ? same + 1 : 0
+          return true if same >= SAME_LOOKS
+          return false if now > deadline
+
+          @session.sender.pause(POLL)
+        end
+      end
+
+      # The entry that a step takes must be on the screen, or the key or the point means something
+      # else. A menu with one anchor says which tab is open, and not what a list inside it holds.
+      def require_entry(step)
+        expected = step[:seen_any]
+        return if expected.nil? || on_screen?(expected)
+
+        raise Error.new('the entry this step needs is not on the screen, so its input was not sent',
                         code: 'UNKNOWN_SCREEN', next_steps: ['Read the capture with cdctl observe.'])
       end
 
@@ -180,21 +274,32 @@ module Cdctl
                           next_steps: ['Read the capture with cdctl observe. If it is loading, wait and try again.'])
       end
 
-      def take(edge, target)
+      def take(edge, from, target)
         @steps += 1
         raise Error.new('too many steps without reaching the screen', code: 'VERIFY_FAILED') if @steps > MAX_STEPS
 
+        @unanswered&.check!(from)
+        require_entry(edge)
         edge[:key] ? send_key(edge[:key]) : click(edge[:click])
-        wait_for(edge[:to]).tap { @session.sender.pause(ARRIVAL_SETTLE) if target }
+        answered(edge, from).tap { @session.sender.pause(ARRIVAL_SETTLE) if target }
+      end
+
+      def answered(edge, from)
+        wait_for(edge[:to]).tap { @unanswered&.clear }
+      rescue Error => e
+        @unanswered&.note(from, edge[:to]) if e.code == 'VERIFY_FAILED'
+        raise
       end
 
       # Some transitions hold only in one context: Escape from the settings returns to wherever they
-      # were opened from. What shows on the screen now says which one this is.
+      # were opened from. What shows on the screen now says which one this is, and a single frame
+      # answers for all of them, so the context cannot change halfway through the question.
       def open_edges
+        frame = @eyes.frame
         @profile.transitions.select do |edge|
-          next false if edge[:requires] && !@eyes.sees?(edge[:requires])
+          next false if edge[:requires] && !@eyes.sees?(edge[:requires], frame)
 
-          !(edge[:unless] && @eyes.sees?(edge[:unless]))
+          !(edge[:unless] && @eyes.sees?(edge[:unless], frame))
         end
       end
 
@@ -225,11 +330,12 @@ module Cdctl
         nil
       end
 
-      def timed_out(names, match)
-        Error.new("waited #{@step_timeout.round} seconds for #{names.join(' or ')} and the screen is " \
+      def timed_out(names, match, timeout)
+        Error.new("waited #{timeout.round} seconds for #{names.join(' or ')} and the screen is " \
                   "#{match&.name || 'not recognized'}", code: 'VERIFY_FAILED',
                                                         next_steps: ['Read the capture with cdctl observe. Do not ' \
-                                                                     'repeat the input without looking first.'])
+                                                                     'repeat the input without looking first: it may ' \
+                                                                     'still be on its way.'])
       end
 
       def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)

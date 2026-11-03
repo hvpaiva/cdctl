@@ -39,6 +39,7 @@ module Cdctl
         require_preset(profile, snapshot)
         with_session(observer, runtime, invocation, snapshot, opts) do |session|
           navigator = Driving::Navigator.new(session:, eyes: eyes_for(observer, snapshot, profile), profile:,
+                                             unanswered: Driving::Unanswered.new(runtime.paths.input_dir),
                                              window: snapshot.window, step_timeout: @timeout.to_f)
           yield Turn.new(invocation:, runtime:, snapshot:, session:, navigator:)
         end
@@ -54,25 +55,28 @@ module Cdctl
       def answer(turn, trip)
         Observer.open(turn.runtime) do |later|
           fresh = later.snapshot
-          artifact = capture(later, turn.runtime, fresh, turn.invocation)
-          verification = { method: 'visual_anchors', screenshot: artifact[:path], expected: trip[:expected],
-                           observed: trip[:after].to_h }
+          artifact = capture_if_possible(later, turn.runtime, fresh, turn.invocation)
+          verification = { method: 'visual_anchors', screenshot: artifact&.fetch(:path, nil), expected: trip[:expected],
+                           observed: trip[:after].to_h }.compact
           screens = { before: { screen: trip[:before]&.name },
                       after: { screen: trip[:after].name, score: trip[:after].score.round(3) } }
-          turn.invocation.success(**sent_so_far(turn, fresh), **screens, verification:, artifacts: [artifact],
-                                                                         changed: turn.navigator.steps_taken.positive?)
+          turn.invocation.success(**sent_so_far(turn, fresh, artifact), **screens, verification:,
+                                                                                   artifacts: [artifact].compact)
         end
       end
 
-      def sent_so_far(turn, fresh)
+      # A release left over from an earlier command counts as a change too: it is a key let go.
+      def sent_so_far(turn, fresh, artifact)
+        actions = turn.session.sender.actions
         { data: { modals: fresh.modals, activity: turn.session.activity_report, steps: turn.navigator.steps_taken },
-          target: fresh.target || turn.snapshot.target, actions: turn.session.sender.actions,
-          not_verified: turn.session.not_verified }
+          target: fresh.target || turn.snapshot.target, actions:, changed: !actions.empty?,
+          not_verified: (with_the_screen_known(notes_on(fresh, artifact)) + turn.session.not_verified).uniq }
       end
 
       def render(context, result)
         rows(context, [['Before', result.before[:screen].to_s], ['After', result.after[:screen]],
-                       ['Steps', result.data[:steps].to_s], ['Capture', result.artifacts.first[:path]]])
+                       ['Steps', result.data[:steps].to_s],
+                       ['Capture', result.artifacts.first&.fetch(:path, nil) || 'none taken']])
       end
     end
 
